@@ -842,6 +842,7 @@ export function options(input: {
 
   if (input.model.api.npm === "@ai-sdk/azure") {
     result["store"] = true
+    result["promptCacheKey"] = input.sessionID
   }
 
   // kilocode_change start
