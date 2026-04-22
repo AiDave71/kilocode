@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { Bus } from "../../src/bus"
 import { KiloSessionPromptQueue } from "../../src/kilocode/session/prompt-queue"
 import { Suggestion } from "../../src/kilocode/suggestion"
+import { Question } from "../../src/question"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
@@ -223,70 +224,82 @@ describe("session prompt queue", () => {
     expect(ids[ids.length - 1]).toBe(injected)
   })
 
-  test("retains distinct reserved versions during rapid replacement", async () => {
-    const sessionID = SessionID.make("session_reserve_race")
-    const ready = Promise.withResolvers<void>()
-    const gate = Promise.withResolvers<void>()
-    const runs: string[] = []
-
-    const base = Effect.runPromise(
-      KiloSessionPromptQueue.enqueue(
-        sessionID,
-        MessageID.make("message_a"),
-        Effect.sync(() => ready.resolve()).pipe(
-          Effect.flatMap(() => Effect.promise(() => gate.promise)),
-          Effect.as("a"),
-        ),
-        Effect.succeed("a-cancelled"),
-      ),
-    )
-
-    await ready.promise
-
-    const one = await Effect.runPromise(KiloSessionPromptQueue.reserve(sessionID))
-    const two = await Effect.runPromise(KiloSessionPromptQueue.reserve(sessionID))
+  test("hasFollowup reports true only for prompts enqueued after the active slot started", async () => {
+    const sessionID = SessionID.make("session_followup_semantics")
+    const observed: Array<{ where: string; value: boolean }> = []
+    const firstStarted = Promise.withResolvers<void>()
+    const firstReleased = Promise.withResolvers<void>()
+    const secondStarted = Promise.withResolvers<void>()
+    const secondReleased = Promise.withResolvers<void>()
 
     const first = Effect.runPromise(
       KiloSessionPromptQueue.enqueue(
         sessionID,
-        MessageID.make("message_b"),
-        Effect.sync(() => {
-          runs.push("b")
-          return "b"
+        MessageID.make("message_followup_1"),
+        Effect.gen(function* () {
+          observed.push({ where: "first:start", value: KiloSessionPromptQueue.hasFollowup(sessionID) })
+          firstStarted.resolve()
+          yield* Effect.promise(() => firstReleased.promise)
+          observed.push({ where: "first:end", value: KiloSessionPromptQueue.hasFollowup(sessionID) })
+          return "first"
         }),
-        Effect.sync(() => {
-          runs.push("b-cancelled")
-          return "b-cancelled"
-        }),
-        one,
+        Effect.succeed("first-cancelled"),
       ),
     )
+
+    await firstStarted.promise
+    // msg1 is alone — nothing newer has arrived yet.
+    expect(observed[0]?.value).toBe(false)
 
     const second = Effect.runPromise(
       KiloSessionPromptQueue.enqueue(
         sessionID,
-        MessageID.make("message_c"),
-        Effect.sync(() => {
-          runs.push("c")
-          return "c"
+        MessageID.make("message_followup_2"),
+        Effect.gen(function* () {
+          observed.push({ where: "second:start", value: KiloSessionPromptQueue.hasFollowup(sessionID) })
+          secondStarted.resolve()
+          yield* Effect.promise(() => secondReleased.promise)
+          return "second"
         }),
-        Effect.sync(() => {
-          runs.push("c-cancelled")
-          return "c-cancelled"
-        }),
-        two,
+        Effect.succeed("second-cancelled"),
       ),
     )
 
-    gate.resolve()
+    // Enqueueing msg2 while msg1 is still running must flip hasFollowup to true
+    // for msg1's running slot.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(true)
 
-    expect(await base).toBe("a")
-    expect(await first).toBe("b-cancelled")
-    expect(await second).toBe("c")
-    expect(runs).toEqual(["b-cancelled", "c"])
+    const third = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        MessageID.make("message_followup_3"),
+        Effect.sync(() => {
+          observed.push({ where: "third:start", value: KiloSessionPromptQueue.hasFollowup(sessionID) })
+          return "third"
+        }),
+        Effect.succeed("third-cancelled"),
+      ),
+    )
+
+    // Let msg1 finish.
+    firstReleased.resolve()
+    await first
+    await secondStarted.promise
+
+    // msg2 started after msg3 was enqueued, so hasFollowup should be false for
+    // msg2 — everything waiting is older than msg2's activeSince snapshot.
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(false)
+    secondReleased.resolve()
+
+    expect(await second).toBe("second")
+    expect(await third).toBe("third")
+
+    const events = observed.map((item) => `${item.where}=${item.value}`)
+    expect(events).toEqual(["first:start=false", "first:end=true", "second:start=false", "third:start=false"])
   })
 
-  test("cancels the in-flight turn when a new prompt arrives", async () => {
+  test("processes queued prompts without aborting the in-flight stream", async () => {
     const ready = Promise.withResolvers<void>()
     const injected = Promise.withResolvers<void>()
     const calls: number[] = []
@@ -299,7 +312,7 @@ describe("session prompt queue", () => {
         calls.push(Date.now())
         const body =
           calls.length === 1
-            ? reply({ text: "first reply", ready: ready.resolve, wait: new Promise(() => {}) })
+            ? reply({ text: "first reply", ready: ready.resolve })
             : reply({ text: "second reply", ready: injected.resolve })
         return new Response(body, {
           status: 200,
@@ -353,15 +366,17 @@ describe("session prompt queue", () => {
             parts: [{ type: "text", text: "second prompt" }],
           })
 
-          await injected.promise
-          expect(calls).toHaveLength(2)
-
           const one = await first
+          await injected.promise
           const two = await second
 
-          expect(one.info.role).toBe("assistant")
-          expect(hasText(two, "second reply")).toBe(true)
           expect(calls).toHaveLength(2)
+
+          // The in-flight stream must complete; no aborted error on msg1's reply.
+          expect(one.info.role).toBe("assistant")
+          if (one.info.role === "assistant") expect(one.info.error).toBeUndefined()
+          expect(hasText(one, "first reply")).toBe(true)
+          expect(hasText(two, "second reply")).toBe(true)
 
           const msgs = await Session.messages({ sessionID: session.id })
           const users = msgs.filter((msg) => msg.info.role === "user")
@@ -373,19 +388,26 @@ describe("session prompt queue", () => {
             msg.parts.filter((part) => part.type === "text").map((part) => part.text),
           )
           expect(users).toHaveLength(2)
+          expect(assistants).toHaveLength(2)
           expect(prompts).toContain("first prompt")
           expect(prompts).toContain("second prompt")
+          expect(text).toContain("first reply")
           expect(text).toContain("second reply")
-          expect(text).not.toContain("first reply")
 
-          const latest = assistants.find((msg) => hasText(msg, "second reply"))
+          const firstUser = users.find((msg) => hasText(msg, "first prompt"))
           const secondUser = users.find((msg) => hasText(msg, "second prompt"))
-          expect(latest?.info.role).toBe("assistant")
-          expect(secondUser?.info.role).toBe("user")
-          if (latest?.info.role !== "assistant" || secondUser?.info.role !== "user") {
-            throw new Error("missing hot-injected turn")
+          const firstReply = assistants.find((msg) => hasText(msg, "first reply"))
+          const secondReply = assistants.find((msg) => hasText(msg, "second reply"))
+          if (
+            firstUser?.info.role !== "user" ||
+            secondUser?.info.role !== "user" ||
+            firstReply?.info.role !== "assistant" ||
+            secondReply?.info.role !== "assistant"
+          ) {
+            throw new Error("missing expected messages")
           }
-          expect(latest.info.parentID).toBe(secondUser.info.id)
+          expect(firstReply.info.parentID).toBe(firstUser.info.id)
+          expect(secondReply.info.parentID).toBe(secondUser.info.id)
         },
       })
     } finally {
@@ -393,9 +415,8 @@ describe("session prompt queue", () => {
     }
   })
 
-  test("cancel resets internal state after a hot-injected prompt replaces the active turn", async () => {
+  test("cancel drops queued prompts and resets internal state", async () => {
     const ready = Promise.withResolvers<void>()
-    const injected = Promise.withResolvers<void>()
     const calls: number[] = []
     const server = Bun.serve({
       port: 0,
@@ -404,10 +425,7 @@ describe("session prompt queue", () => {
         if (!url.pathname.endsWith("/chat/completions")) return new Response("not found", { status: 404 })
 
         calls.push(Date.now())
-        const body =
-          calls.length === 1
-            ? reply({ text: "first reply", ready: ready.resolve, wait: new Promise(() => {}) })
-            : reply({ text: "second reply", ready: injected.resolve, wait: new Promise(() => {}) })
+        const body = reply({ text: "first reply", ready: ready.resolve, wait: new Promise(() => {}) })
         return new Response(body, {
           status: 200,
           headers: { "Content-Type": "text/event-stream" },
@@ -451,21 +469,25 @@ describe("session prompt queue", () => {
             agent: "code",
             parts: [{ type: "text", text: "second prompt" }],
           })
+          const third = SessionPrompt.prompt({
+            sessionID: session.id,
+            agent: "code",
+            parts: [{ type: "text", text: "third prompt" }],
+          })
 
-          await injected.promise
-          expect(calls).toHaveLength(2)
+          // Let msg2/msg3's enqueue capture the current version before cancel bumps it.
+          await Bun.sleep(20)
+          expect(calls).toHaveLength(1)
 
           await SessionPrompt.cancel(session.id)
-          const [one, two] = await Promise.all([first, second])
+          await Promise.all([first, second, third])
 
-          expect(one.info.role).toBe("assistant")
-          expect(two.info.role).toBe("assistant")
-          expect(calls).toHaveLength(2)
+          // The queued prompts must never reach the LLM once cancel flushes the queue.
+          expect(calls).toHaveLength(1)
           const msgs = await Session.messages({ sessionID: session.id })
-          const users = msgs.filter((msg) => msg.info.role === "user")
           const assistants = msgs.filter((msg) => msg.info.role === "assistant")
-          expect(users).toHaveLength(2)
-          expect(assistants).toHaveLength(2)
+          expect(assistants).toHaveLength(1)
+          expect(msgs.filter((msg) => msg.info.role === "user")).toHaveLength(3)
 
           // Internal state should have no lingering tail/version/target entries after the last release.
           const ids = await Effect.runPromise(
@@ -477,6 +499,7 @@ describe("session prompt queue", () => {
             ),
           )
           expect(ids).toEqual([])
+          expect(KiloSessionPromptQueue.hasFollowup(session.id)).toBe(false)
         },
       })
     } finally {
@@ -524,6 +547,59 @@ describe("session prompt queue", () => {
         } finally {
           offShown()
           offDismissed()
+        }
+      },
+    })
+  })
+
+  test("new prompt dismisses a pending question", async () => {
+    const asked = Promise.withResolvers<void>()
+    const rejected = Promise.withResolvers<void>()
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({ title: "Question unblock regression" })
+        const offAsked = Bus.subscribe(Question.Event.Asked, (event) => {
+          if (event.properties.sessionID === session.id) asked.resolve()
+        })
+        const offRejected = Bus.subscribe(Question.Event.Rejected, (event) => {
+          if (event.properties.sessionID === session.id) rejected.resolve()
+        })
+
+        try {
+          const pending = Question.ask({
+            sessionID: session.id,
+            questions: [
+              {
+                header: "Continue?",
+                question: "Should I continue?",
+                options: [
+                  { label: "Yes", description: "Go ahead" },
+                  { label: "No", description: "Stop" },
+                ],
+              },
+            ],
+          }).catch((err) => {
+            if (err instanceof Question.RejectedError) return "rejected"
+            throw err
+          })
+
+          await asked.promise
+          await SessionPrompt.prompt({
+            sessionID: session.id,
+            agent: "code",
+            parts: [{ type: "text", text: "replacement prompt" }],
+            noReply: true,
+          })
+          await rejected.promise
+
+          expect(await pending).toBe("rejected")
+          expect(await Question.list()).toEqual([])
+        } finally {
+          offAsked()
+          offRejected()
         }
       },
     })

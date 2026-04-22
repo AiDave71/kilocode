@@ -3,16 +3,11 @@ import { MessageV2 } from "@/session/message-v2"
 import { MessageID, SessionID } from "@/session/schema"
 
 type Slot = {
+  readonly seq: number
   readonly version: number
   readonly previous: Promise<void>
   readonly done: PromiseWithResolvers<void>
   readonly tail: Promise<void>
-}
-
-type Reserve = {
-  readonly id: number
-  readonly version: number
-  readonly previous: Promise<void>
 }
 
 type Target = {
@@ -24,8 +19,13 @@ export namespace KiloSessionPromptQueue {
   const tails = new Map<SessionID, Promise<void>>()
   const versions = new Map<SessionID, number>()
   const targets = new Map<SessionID, Target>()
-  const reserved = new Map<SessionID, Reserve>()
-  let ids = 0
+  // Monotonic arrival counter per session. latest holds the seq of the most
+  // recently enqueued slot; activeSince snapshots latest at the moment the
+  // currently running slot actually started. hasFollowup returns true only when
+  // a newer slot was enqueued after the active one began running.
+  const latest = new Map<SessionID, number>()
+  const activeSince = new Map<SessionID, number>()
+  let seq = 0
 
   const version = (sessionID: SessionID) => versions.get(sessionID) ?? 0
   const settle = (promise: Promise<void>) =>
@@ -40,20 +40,6 @@ export namespace KiloSessionPromptQueue {
     })
   }
 
-  export function reserve(sessionID: SessionID) {
-    return Effect.sync(() => {
-      const next = version(sessionID) + 1
-      versions.set(sessionID, next)
-      const slot = {
-        id: ++ids,
-        version: next,
-        previous: tails.get(sessionID) ?? Promise.resolve(),
-      } satisfies Reserve
-      reserved.set(sessionID, slot)
-      return slot
-    })
-  }
-
   /**
    * Exempt an injected user message from being hidden by scope().
    * Called after PlanFollowup.inject() so the injected follow-up is visible
@@ -65,6 +51,18 @@ export namespace KiloSessionPromptQueue {
     const extras = new Set(current.extras)
     extras.add(id)
     targets.set(sessionID, { base: current.base, extras })
+  }
+
+  /**
+   * True when a newer prompt was enqueued after the currently running slot
+   * began. runLoop calls this between LLM steps to break out so the next
+   * queued prompt can take over without starting another LLM round-trip for
+   * the now-superseded turn.
+   */
+  export function hasFollowup(sessionID: SessionID): boolean {
+    const l = latest.get(sessionID) ?? 0
+    const a = activeSince.get(sessionID) ?? 0
+    return l > a
   }
 
   export function scope(sessionID: SessionID, messages: MessageV2.WithParts[]) {
@@ -109,24 +107,26 @@ export namespace KiloSessionPromptQueue {
     target: MessageID,
     work: Effect.Effect<A, E>,
     cancelled: Effect.Effect<A, E>,
-    hold?: Reserve,
   ): Effect.Effect<A, E> {
     return Effect.acquireUseRelease(
       Effect.sync(() => {
-        const held = reserved.get(sessionID)
-        const seed = held && hold && held.id === hold.id ? held : undefined
-        if (seed) reserved.delete(sessionID)
-        const previous = seed?.previous ?? tails.get(sessionID) ?? Promise.resolve()
+        const mine = ++seq
+        latest.set(sessionID, mine)
+        const previous = tails.get(sessionID) ?? Promise.resolve()
         const done = Promise.withResolvers<void>()
         // Keep later queued prompts moving; each caller still observes its own failure.
         const tail = settle(previous).then(() => done.promise)
         tails.set(sessionID, tail)
-        return { version: hold?.version ?? version(sessionID), previous, done, tail } satisfies Slot
+        return { seq: mine, version: version(sessionID), previous, done, tail } satisfies Slot
       }),
       (slot) =>
         Effect.promise(() => settle(slot.previous)).pipe(
           Effect.flatMap(() => {
             if (slot.version !== version(sessionID)) return cancelled
+            // Snapshot the latest seq at the moment this slot actually starts
+            // running. hasFollowup compares against this value so the slot only
+            // breaks when something newer than itself arrives.
+            activeSince.set(sessionID, latest.get(sessionID) ?? slot.seq)
             return Effect.acquireUseRelease(
               Effect.sync(() => {
                 targets.set(sessionID, { base: target, extras: new Set() })
@@ -146,6 +146,8 @@ export namespace KiloSessionPromptQueue {
           tails.delete(sessionID)
           versions.delete(sessionID)
           targets.delete(sessionID)
+          latest.delete(sessionID)
+          activeSince.delete(sessionID)
         }),
     )
   }

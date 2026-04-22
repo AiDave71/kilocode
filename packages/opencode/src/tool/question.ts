@@ -22,11 +22,25 @@ export const QuestionTool = Tool.define<typeof parameters, Metadata, Question.Se
       parameters,
       execute: (params: z.infer<typeof parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
-          const answers = yield* question.ask({
-            sessionID: ctx.sessionID,
-            questions: params.questions,
-            tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
-          })
+          // kilocode_change start - gracefully surface RejectedError (e.g. from Question.dismissAll
+          // when a new prompt arrives mid-question) as a "dismissed" outcome instead of turning it
+          // into a defect via Effect.orDie, which would kill the in-flight stream.
+          const answers = yield* question
+            .ask({
+              sessionID: ctx.sessionID,
+              questions: params.questions,
+              tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
+            })
+            .pipe(Effect.catchTag("QuestionRejectedError", () => Effect.succeed<"dismissed">("dismissed")))
+          if (answers === "dismissed") {
+            const dismissed: Metadata = { answers: [] }
+            return {
+              title: "Question dismissed",
+              output: "User dismissed the question.",
+              metadata: dismissed,
+            }
+          }
+          // kilocode_change end
 
           const formatted = params.questions
             .map((q, i) => `"${q.question}"="${answers[i]?.length ? answers[i].join(", ") : "Unanswered"}"`)
