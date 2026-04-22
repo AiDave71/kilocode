@@ -1311,7 +1311,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           // waiting on Suggestion.show() — the suggest tool's abort listener then
           // resolves the suggestion promise on cancel.
           yield* Effect.promise(() => Suggestion.dismissAll(input.sessionID))
-          yield* KiloSessionPromptQueue.reserve(input.sessionID)
+          const hold = yield* KiloSessionPromptQueue.reserve(input.sessionID)
           yield* state.cancel(input.sessionID)
           // kilocode_change end
           return yield* KiloSessionPromptQueue.enqueue(
@@ -1319,6 +1319,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             message.info.id,
             loop({ sessionID: input.sessionID }),
             lastAssistant(input.sessionID),
+            hold,
           )
         },
       )

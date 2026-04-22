@@ -30,7 +30,7 @@ describe("prompt.ts Kilo-specific invariants", () => {
     // restarts the loop, while still letting newer prompts supersede older
     // replacements during the cancel window.
     const block = content.match(
-      /kilocode_change start[^\n]*hot-inject[\s\S]*?Suggestion\.dismissAll[\s\S]*?KiloSessionPromptQueue\.reserve\(input\.sessionID\)[\s\S]*?state\.cancel\(input\.sessionID\)[\s\S]*?kilocode_change end[\s\S]*?KiloSessionPromptQueue\.enqueue/,
+      /kilocode_change start[^\n]*hot-inject[\s\S]*?Suggestion\.dismissAll[\s\S]*?const hold = yield\* KiloSessionPromptQueue\.reserve\(input\.sessionID\)[\s\S]*?state\.cancel\(input\.sessionID\)[\s\S]*?kilocode_change end[\s\S]*?KiloSessionPromptQueue\.enqueue\([\s\S]*?hold/,
     )
     expect(block).not.toBeNull()
   })

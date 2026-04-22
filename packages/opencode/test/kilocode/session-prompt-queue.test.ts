@@ -225,44 +225,65 @@ describe("session prompt queue", () => {
 
   test("retains distinct reserved versions during rapid replacement", async () => {
     const sessionID = SessionID.make("session_reserve_race")
+    const ready = Promise.withResolvers<void>()
     const gate = Promise.withResolvers<void>()
     const runs: string[] = []
 
-    const one = Effect.runPromise(
-      Effect.gen(function* () {
-        yield* KiloSessionPromptQueue.reserve(sessionID)
-        return yield* KiloSessionPromptQueue.enqueue(
-          sessionID,
-          MessageID.make("message_b"),
-          Effect.promise(() => gate.promise).pipe(Effect.as("b")),
-          Effect.succeed("b-cancelled"),
-        )
-      }),
+    const base = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        MessageID.make("message_a"),
+        Effect.sync(() => ready.resolve()).pipe(
+          Effect.flatMap(() => Effect.promise(() => gate.promise)),
+          Effect.as("a"),
+        ),
+        Effect.succeed("a-cancelled"),
+      ),
     )
 
-    const two = Effect.runPromise(
-      Effect.gen(function* () {
-        yield* KiloSessionPromptQueue.reserve(sessionID)
-        return yield* KiloSessionPromptQueue.enqueue(
-          sessionID,
-          MessageID.make("message_c"),
-          Effect.sync(() => {
-            runs.push("c")
-            return "c"
-          }),
-          Effect.sync(() => {
-            runs.push("c-cancelled")
-            return "c-cancelled"
-          }),
-        )
-      }),
+    await ready.promise
+
+    const one = await Effect.runPromise(KiloSessionPromptQueue.reserve(sessionID))
+    const two = await Effect.runPromise(KiloSessionPromptQueue.reserve(sessionID))
+
+    const first = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        MessageID.make("message_b"),
+        Effect.sync(() => {
+          runs.push("b")
+          return "b"
+        }),
+        Effect.sync(() => {
+          runs.push("b-cancelled")
+          return "b-cancelled"
+        }),
+        one,
+      ),
+    )
+
+    const second = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        MessageID.make("message_c"),
+        Effect.sync(() => {
+          runs.push("c")
+          return "c"
+        }),
+        Effect.sync(() => {
+          runs.push("c-cancelled")
+          return "c-cancelled"
+        }),
+        two,
+      ),
     )
 
     gate.resolve()
 
-    expect(await one).toBe("b-cancelled")
-    expect(await two).toBe("c")
-    expect(runs).toEqual(["c"])
+    expect(await base).toBe("a")
+    expect(await first).toBe("b-cancelled")
+    expect(await second).toBe("c")
+    expect(runs).toEqual(["b-cancelled", "c"])
   })
 
   test("cancels the in-flight turn when a new prompt arrives", async () => {

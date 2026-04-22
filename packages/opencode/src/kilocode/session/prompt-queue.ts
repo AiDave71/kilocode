@@ -109,19 +109,19 @@ export namespace KiloSessionPromptQueue {
     target: MessageID,
     work: Effect.Effect<A, E>,
     cancelled: Effect.Effect<A, E>,
+    hold?: Reserve,
   ): Effect.Effect<A, E> {
     return Effect.acquireUseRelease(
       Effect.sync(() => {
         const held = reserved.get(sessionID)
-        const same = !!held && held.previous === tails.get(sessionID) && held.version === version(sessionID)
-        const seed = same ? held : undefined
+        const seed = held && hold && held.id === hold.id ? held : undefined
         if (seed) reserved.delete(sessionID)
         const previous = seed?.previous ?? tails.get(sessionID) ?? Promise.resolve()
         const done = Promise.withResolvers<void>()
         // Keep later queued prompts moving; each caller still observes its own failure.
         const tail = settle(previous).then(() => done.promise)
         tails.set(sessionID, tail)
-        return { version: seed?.version ?? version(sessionID), previous, done, tail } satisfies Slot
+        return { version: hold?.version ?? version(sessionID), previous, done, tail } satisfies Slot
       }),
       (slot) =>
         Effect.promise(() => settle(slot.previous)).pipe(
