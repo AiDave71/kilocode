@@ -1315,7 +1315,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           // enqueued during the turn.
           yield* Effect.promise(() => Suggestion.dismissAll(input.sessionID))
           yield* Effect.promise(() => Question.dismissAll(input.sessionID))
-          // kilocode_change end
           if (input.noReply === true) return message
           return yield* KiloSessionPromptQueue.enqueue(
             input.sessionID,
@@ -1323,6 +1322,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             loop({ sessionID: input.sessionID }),
             lastAssistant(input.sessionID),
           )
+          // kilocode_change end
         },
       )
       // kilocode_change end

@@ -38,7 +38,7 @@ describe("prompt.ts Kilo-specific invariants", () => {
     // either of those would abort the running streamText mid-tokens, which was
     // the #9332 regression. Order: dismissAll(Suggestion) → dismissAll(Question) → enqueue.
     const block = content.match(
-      /kilocode_change start[^\n]*unblock tools[\s\S]*?Suggestion\.dismissAll[\s\S]*?Question\.dismissAll[\s\S]*?kilocode_change end[\s\S]*?KiloSessionPromptQueue\.enqueue/,
+      /kilocode_change start[^\n]*unblock tools[\s\S]*?Suggestion\.dismissAll[\s\S]*?Question\.dismissAll[\s\S]*?KiloSessionPromptQueue\.enqueue/,
     )
     expect(block).not.toBeNull()
     expect(content).not.toMatch(/state\.cancel\(input\.sessionID\)/)
