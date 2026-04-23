@@ -19,7 +19,6 @@ import { useVSCode } from "../../context/vscode"
 import { useLanguage } from "../../context/language"
 import { useWorktreeMode } from "../../context/worktree-mode"
 import { useServer } from "../../context/server"
-import { registerAbortPress, resetAbortPress } from "../../context/session-abort-press"
 import { isPromptBlocked, isSuggesting, isQuestioning } from "./prompt-input-utils"
 
 interface ChatViewProps {
@@ -90,25 +89,11 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || session.status() === "idle" || e.defaultPrevented) return
       e.preventDefault()
-      if (registerAbortPress()) session.abort()
+      session.abort()
     }
     document.addEventListener("keydown", handler)
-    onCleanup(() => {
-      document.removeEventListener("keydown", handler)
-      resetAbortPress()
-    })
+    onCleanup(() => document.removeEventListener("keydown", handler))
   })
-
-  // Reset the double-Esc counter whenever the session returns to idle so a
-  // single Esc press from a prior turn cannot combine with a press in the next turn.
-  createEffect(
-    on(
-      () => session.status() === "idle",
-      (isIdle) => {
-        if (isIdle) resetAbortPress()
-      },
-    ),
-  )
 
   // Listen for "Continue in Worktree" progress messages
   {
