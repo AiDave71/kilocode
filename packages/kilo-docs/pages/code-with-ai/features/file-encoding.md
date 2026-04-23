@@ -47,4 +47,5 @@ If Kilo displays a file as garbled text, or writes it back in a different encodi
   Get-FileHash path\to\file -Algorithm SHA256
   ```
 
-- **The model and provider** you were using when the issue occurred, for example `claude-sonnet-4.5` via Kilo Gateway, or `gpt-4o` via OpenAI.
+- **The model and provider** you were using when the issue occurred, for example `claude-sonnet-4.5` via Kilo Gateway.
+- **The exact Kilo version** you are running. For the CLI, run `kilo --version`. For the VS Code extension, open the Extensions view and check the version next to "Kilo Code".
