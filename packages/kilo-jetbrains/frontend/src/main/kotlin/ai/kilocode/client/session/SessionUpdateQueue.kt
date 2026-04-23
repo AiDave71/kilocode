@@ -74,6 +74,7 @@ internal class SessionUpdateQueue(
 
     private fun flushNow(forced: Boolean, source: String) {
         if (hold) return
+        condenseHidden()
         if (!showing()) return
         if (pending.isEmpty()) return
         val now = System.currentTimeMillis()
@@ -88,6 +89,16 @@ internal class SessionUpdateQueue(
         fire(batch)
     }
 
+    private fun condenseHidden() {
+        if (!condense) return
+        if (showing()) return
+        if (pending.size < 2) return
+        val batch = condenser.condense(pending.toList())
+        if (batch.size == pending.size) return
+        pending.clear()
+        pending.addAll(batch)
+    }
+
     private fun showing(): Boolean = comp?.isShowing ?: true
 
     private fun edt(block: () -> Unit) {
@@ -98,4 +109,3 @@ internal class SessionUpdateQueue(
         app.invokeLater(block)
     }
 }
-

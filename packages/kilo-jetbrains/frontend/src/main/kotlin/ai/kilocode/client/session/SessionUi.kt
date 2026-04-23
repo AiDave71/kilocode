@@ -53,9 +53,14 @@ class SessionUi(
         private val LOG = KiloLog.create(SessionUi::class.java)
     }
 
+    private val flushMs = Registry.intValue("kilo.session.flushMs", EVENT_FLUSH_MS.toInt())
+        .takeIf { it > 0 }
+        ?.toLong()
+        ?: EVENT_FLUSH_MS
+
     private val controller = SessionController(
         this, null, sessions, workspace, app, cs, this,
-        flushMs = Registry.intValue("kilo.session.flushMs", EVENT_FLUSH_MS.toInt()).toLong(),
+        flushMs = flushMs,
         condense = Registry.`is`("kilo.session.condense", true),
     )
 

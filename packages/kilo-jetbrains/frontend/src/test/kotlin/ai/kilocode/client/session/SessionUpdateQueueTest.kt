@@ -39,6 +39,48 @@ class SessionUpdateQueueTest : SessionControllerTestBase() {
         assertTrue(m.model.state is SessionState.Busy)
     }
 
+    fun `test hidden controller condenses while hidden but does not flush`() {
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY)
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test", flushMs = 250L)
+        val modelEvents = collectModelEvents(m)
+        flush()
+        modelEvents.clear()
+
+        hide(m)
+        emit(ChatEventDto.MessageUpdated("ses_test", msg("msg1", "ses_test", "assistant")), flush = false)
+        repeat(4) { i ->
+            emit(ChatEventDto.PartDelta("ses_test", "msg1", "txt1", "text", " chunk$i"), flush = false)
+        }
+        emit(ChatEventDto.PartUpdated("ses_test", part("tool1", "ses_test", "msg1", "tool", tool = "bash", state = "running")), flush = false)
+        emit(ChatEventDto.PartUpdated("ses_test", part("tool1", "ses_test", "msg1", "tool", tool = "bash", state = "completed", title = "Run build")), flush = false)
+        settle()
+
+        assertTrue(modelEvents.isEmpty())
+        assertEquals(SessionState.Idle, m.model.state)
+
+        show(m)
+        settle()
+        flush()
+
+        assertModelEvents("""
+            MessageAdded msg1
+            TurnAdded msg1 [msg1]
+            ContentAdded msg1/txt1
+            ContentDelta msg1/txt1
+            ContentAdded msg1/tool1
+        """, modelEvents)
+        assertModel(
+            """
+            assistant#msg1
+            text#txt1:
+               chunk0 chunk1 chunk2 chunk3
+            tool#tool1 bash [COMPLETED] Run build
+            """,
+            m,
+        )
+    }
+
     fun `test buffered deltas coalesce into one model delta`() {
         appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY)
         projectRpc.state.value = workspaceReady()
