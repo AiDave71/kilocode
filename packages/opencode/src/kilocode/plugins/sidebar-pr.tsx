@@ -1,11 +1,32 @@
 // kilocode_change - new file
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@kilocode/plugin/tui"
-import { createResource, Show } from "solid-js"
+import { createMemo, createResource, Show } from "solid-js"
 import { Process } from "@/util"
 
 const id = "internal:kilo-sidebar-pr"
 
 type Pr = { number: number; title: string }
+
+function wait(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const done = () => {
+      clearTimeout(id)
+      signal.removeEventListener("abort", stop)
+    }
+
+    const stop = () => {
+      done()
+      reject(signal.reason)
+    }
+
+    const id = setTimeout(() => {
+      done()
+      resolve()
+    }, ms)
+
+    signal.addEventListener("abort", stop, { once: true })
+  })
+}
 
 async function lookup(cwd: string, branch: string): Promise<Pr | null> {
   // Try the tracking ref first (works when PR was checked out via `gh pr checkout`
@@ -18,7 +39,15 @@ async function lookup(cwd: string, branch: string): Promise<Pr | null> {
     return a
   }
   for (const cmd of [build(), build(branch)]) {
-    const res = await Process.text(cmd, { cwd, nothrow: true, timeout: 15_000 })
+    const ctrl = new AbortController()
+    const timer = wait(15_000, ctrl.signal).then(() => ctrl.abort())
+    const res = await Process.text(cmd, {
+      cwd,
+      abort: ctrl.signal,
+      nothrow: true,
+      timeout: 1_000,
+    }).finally(() => ctrl.abort())
+    await timer.catch(() => undefined)
     if (res.code !== 0) continue
     const text = res.text.trim()
     if (!text) continue
@@ -32,27 +61,35 @@ async function lookup(cwd: string, branch: string): Promise<Pr | null> {
 
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
-  const branch = () => props.api.state.vcs?.branch
-  const cwd = () => props.api.state.path.directory
+  const branch = createMemo(() => props.api.state.vcs?.branch)
+  const cwd = createMemo(() => props.api.state.path.directory)
 
-  const source = () => {
+  // Primitive string key: createResource wraps source in createMemo and
+  // compares with === for equality, so the same inputs produce a stable key
+  // and the fetcher is not retriggered on every render.
+  const key = createMemo(() => {
     const b = branch()
     const d = cwd()
-    if (!b || !d) return false
-    return { branch: b, cwd: d }
-  }
-
-  const [pr] = createResource(source, async (s) => {
-    if (!s) return null
-    return lookup(s.cwd, s.branch).catch(() => null)
+    if (!b || !d) return false as const
+    return `${d}\0${b}`
   })
 
+  const [pr] = createResource(key, async (k) => {
+    const [d, b] = k.split("\0")
+    return lookup(d, b).catch(() => null)
+  })
+
+  // The wrapper <box> must be present unconditionally — the OpenTUI slot
+  // registry relies on a stable root node per plugin. Gating the whole tree
+  // on `<Show>` breaks the mount. Conditionally render only the inner text.
   return (
-    <Show when={pr()}>
-      <text fg={theme().textMuted}>
-        PR #{pr()!.number} - {pr()!.title}
-      </text>
-    </Show>
+    <box>
+      <Show when={pr()}>
+        <text fg={theme().textMuted}>
+          PR #{pr()!.number} - {pr()!.title}
+        </text>
+      </Show>
+    </box>
   )
 }
 
