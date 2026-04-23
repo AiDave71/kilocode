@@ -17,6 +17,7 @@ import { useServer } from "../../context/server"
 import { useLanguage } from "../../context/language"
 import { useVSCode } from "../../context/vscode"
 import { useWorktreeMode } from "../../context/worktree-mode"
+import { registerAbortPress } from "../../context/session-abort-press"
 import { ModelSelector } from "../shared/ModelSelector"
 import { ModeSwitcher } from "../shared/ModeSwitcher"
 import { ThinkingSelector } from "../shared/ThinkingSelector"
@@ -553,7 +554,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (e.key === "Escape" && isBusy()) {
       e.preventDefault()
       e.stopPropagation()
-      session.abort()
+      if (registerAbortPress()) session.abort()
       return
     }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
