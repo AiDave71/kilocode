@@ -214,6 +214,8 @@ abstract class SessionControllerTestBase : BasePlatformTestCase() {
         type: String,
         text: String? = null,
         tool: String? = null,
+        state: String? = null,
+        title: String? = null,
     ) = PartDto(
         id = id,
         sessionID = sid,
@@ -221,6 +223,8 @@ abstract class SessionControllerTestBase : BasePlatformTestCase() {
         type = type,
         text = text,
         tool = tool,
+        state = state,
+        title = title,
     )
 
     protected fun workspaceReady(

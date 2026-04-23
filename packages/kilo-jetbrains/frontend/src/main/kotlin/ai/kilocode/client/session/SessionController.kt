@@ -72,7 +72,7 @@ class SessionController(
     private val listeners = mutableListOf<SessionControllerListener>()
     private var sessionId: String? = id
     private val directory: String get() = workspace.directory
-    private val updates = SessionUpdateQueue(parent, comp, flushMs, ::handle, id != null)
+    private val updates = SessionUpdateQueue(parent, comp, flushMs, ::handle, id != null) { sessionId ?: "pending" }
 
     private var partType: String? = null
     private var tool: String? = null
