@@ -29,7 +29,6 @@ class SessionUpdateQueueTest : SessionControllerTestBase() {
 
         show(m)
         settle()
-        flush()
 
         assertModelEvents("""
             StateChanged Busy
@@ -61,7 +60,6 @@ class SessionUpdateQueueTest : SessionControllerTestBase() {
 
         show(m)
         settle()
-        flush()
 
         assertModelEvents("""
             MessageAdded msg1
@@ -76,6 +74,67 @@ class SessionUpdateQueueTest : SessionControllerTestBase() {
             text#txt1:
                chunk0 chunk1 chunk2 chunk3
             tool#tool1 bash [COMPLETED] Run build
+            """,
+            m,
+        )
+    }
+
+    fun `test hidden cadence does not flush until shown`() {
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY)
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test", flushMs = 50L)
+        val modelEvents = collectModelEvents(m)
+        flush()
+        modelEvents.clear()
+
+        hide(m)
+        emit(ChatEventDto.TurnOpen("ses_test"), flush = false)
+        emit(ChatEventDto.MessageUpdated("ses_test", msg("msg1", "ses_test", "assistant")), flush = false)
+        settle()
+
+        assertTrue(modelEvents.isEmpty())
+        assertEquals(SessionState.Idle, m.model.state)
+
+        show(m)
+        settle()
+
+        assertModelEvents("""
+            StateChanged Busy
+            MessageAdded msg1
+            TurnAdded msg1 [msg1]
+        """, modelEvents)
+    }
+
+    fun `test hidden controller flushes on show without new event`() {
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY)
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test", flushMs = 250L)
+        val modelEvents = collectModelEvents(m)
+        flush()
+        modelEvents.clear()
+
+        hide(m)
+        emit(ChatEventDto.MessageUpdated("ses_test", msg("msg1", "ses_test", "assistant")), flush = false)
+        emit(ChatEventDto.PartDelta("ses_test", "msg1", "txt1", "text", "hello "), flush = false)
+        emit(ChatEventDto.PartDelta("ses_test", "msg1", "txt1", "text", "world"), flush = false)
+        settle()
+
+        assertTrue(modelEvents.isEmpty())
+
+        show(m)
+        settle()
+
+        assertModelEvents("""
+            MessageAdded msg1
+            TurnAdded msg1 [msg1]
+            ContentAdded msg1/txt1
+            ContentDelta msg1/txt1
+        """, modelEvents)
+        assertModel(
+            """
+            assistant#msg1
+            text#txt1:
+              hello world
             """,
             m,
         )

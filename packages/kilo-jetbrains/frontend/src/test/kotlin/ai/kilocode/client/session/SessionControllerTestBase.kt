@@ -28,6 +28,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
+import java.awt.event.HierarchyEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -64,7 +65,17 @@ abstract class SessionControllerTestBase : BasePlatformTestCase() {
         private var shown = true
         override fun isShowing(): Boolean = shown
         fun showState(show: Boolean) {
+            val prev = shown
             shown = show
+            if (prev == show) return
+            val event = HierarchyEvent(
+                this,
+                HierarchyEvent.HIERARCHY_CHANGED,
+                this,
+                this.parent,
+                HierarchyEvent.SHOWING_CHANGED.toLong(),
+            )
+            hierarchyListeners.forEach { it.hierarchyChanged(event) }
         }
     }
 
