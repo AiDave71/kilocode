@@ -99,6 +99,17 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     })
   })
 
+  // Reset the double-Esc counter whenever the session returns to idle so a
+  // single Esc press from a prior turn cannot combine with a press in the next turn.
+  createEffect(
+    on(
+      () => session.status() === "idle",
+      (isIdle) => {
+        if (isIdle) resetAbortPress()
+      },
+    ),
+  )
+
   // Listen for "Continue in Worktree" progress messages
   {
     const labels: Record<string, string> = {
