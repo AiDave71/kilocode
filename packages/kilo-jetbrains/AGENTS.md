@@ -68,14 +68,6 @@
 - **Via Turbo**: `bun turbo build --filter=@kilocode/kilo-jetbrains` from repo root.
 - **Run in sandbox**: `./gradlew runIde` — launches sandboxed IntelliJ with the plugin. Does NOT build CLI binaries.
 
-## GitHub Issues
-
-- When creating a GitHub issue for the JetBrains plugin, use the repo's existing issue templates in `.github/ISSUE_TEMPLATE/`. Pick the matching template (`Bug report`, `Feature Request`, or `Question`) instead of opening a blank issue.
-- Do not add JetBrains-specific title prefixes such as `[JetBrains]`, `[Jetbrains]`, `[JB]`, or similar. Use a plain, descriptive title.
-- Always add JetBrains plugin issues to the GitHub project `Jetbrains Plugin`: https://github.com/orgs/Kilo-Org/projects/39
-- When using `gh`, prefer `gh issue create --template "..." --project "Jetbrains Plugin"`.
-- If project assignment fails because `gh` is missing the required scope, run `gh auth refresh -s project` and retry.
-
 ## Files That Must Change Together
 
 - `plugin.xml` `<content>` entries ↔ module XML descriptors (`kilo.jetbrains.{shared,frontend,backend}.xml`)
