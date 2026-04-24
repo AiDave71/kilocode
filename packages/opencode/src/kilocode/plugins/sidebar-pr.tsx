@@ -66,6 +66,68 @@ async function lookup(cwd: string, branch: string): Promise<Pr | null> {
       return { number: data.number, title: data.title }
     }
   }
+
+  return await lookupBySha(cwd)
+}
+
+async function lookupBySha(cwd: string): Promise<Pr | null> {
+  const head = await (async () => {
+    const ctrl = new AbortController()
+    const timer = wait(15_000, ctrl.signal).then(() => ctrl.abort())
+    const res = await Process.text(["git", "rev-parse", "HEAD"], {
+      cwd,
+      abort: ctrl.signal,
+      nothrow: true,
+      timeout: 1_000,
+    }).finally(() => ctrl.abort())
+    await timer.catch(() => undefined)
+    if (res.code !== 0) return ""
+    return res.text.trim()
+  })()
+  if (!head) return null
+
+  {
+    const ctrl = new AbortController()
+    const timer = wait(15_000, ctrl.signal).then(() => ctrl.abort())
+    const res = await Process.text(
+      [
+        "gh",
+        "pr",
+        "list",
+        "--state",
+        "all",
+        "--search",
+        `${head} is:pr`,
+        "--limit",
+        "5",
+        "--json",
+        "number,title,headRefOid",
+      ],
+      {
+        cwd,
+        abort: ctrl.signal,
+        nothrow: true,
+        timeout: 1_000,
+      },
+    ).finally(() => ctrl.abort())
+    await timer.catch(() => undefined)
+    if (res.code !== 0) return null
+
+    const text = res.text.trim()
+    if (!text) return null
+
+    const items = JSON.parse(text) as Array<Partial<Pr> & { headRefOid?: string }>
+    if (!Array.isArray(items) || items.length === 0) return null
+
+    // Only accept a PR whose HEAD matches ours exactly — avoids returning a
+    // random PR that merely references the SHA in a commit message.
+    for (const item of items) {
+      if (item.headRefOid === head && typeof item.number === "number" && typeof item.title === "string") {
+        return { number: item.number, title: item.title }
+      }
+    }
+  }
+
   return null
 }
 
