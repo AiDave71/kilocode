@@ -81,20 +81,18 @@ export const PermissionRoutes = lazy(() =>
           deniedAlways: z.string().array().optional(),
         }),
       ),
-      async (c) => {
-        const params = c.req.valid("param")
-        const json = c.req.valid("json")
-        await AppRuntime.runPromise(
-          Permission.Service.use((svc) =>
-            svc.saveAlwaysRules({
-              requestID: params.requestID,
-              approvedAlways: json.approvedAlways,
-              deniedAlways: json.deniedAlways,
-            }),
-          ),
-        )
-        return c.json(true)
-      },
+      async (c) =>
+        jsonRequest("PermissionRoutes.saveAlwaysRules", c, function* () {
+          const params = c.req.valid("param")
+          const json = c.req.valid("json")
+          const svc = yield* Permission.Service
+          yield* svc.saveAlwaysRules({
+            requestID: params.requestID,
+            approvedAlways: json.approvedAlways,
+            deniedAlways: json.deniedAlways,
+          })
+          return true
+        }),
     )
     // kilocode_change end
     .get(
