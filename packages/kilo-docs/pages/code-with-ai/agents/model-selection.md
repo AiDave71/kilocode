@@ -96,6 +96,26 @@ When an agent delegates work to a subagent (via the `task` tool), the subagent *
 This sets the `explore` subagent to always use Haiku regardless of the parent's model. Any subagent without a `model` override uses whatever model the invoking agent is running.
 
 {% /tab %}
+{% tab label="VSCode" %}
+
+Subagents inherit the model currently active in the primary agent session — the model shown in the selector at the bottom of the chat. To bypass inheritance and pin a specific model for a subagent:
+
+- **Via Settings** — open **Settings → Providers → Model per Mode**, find the subagent, and pick its model.
+- **Via config file** — edit `kilo.jsonc`:
+
+```json
+{
+  "agent": {
+    "explore": {
+      "model": "anthropic/claude-haiku-4-5"
+    }
+  }
+}
+```
+
+The Settings UI writes the same `agent.<name>.model` entry, so either method produces the same override. Subagents without an explicit model continue to inherit whatever the invoking agent is running.
+
+{% /tab %}
 {% tab label="VSCode (Legacy)" %}
 
 In the legacy extension, each mode has **Sticky Models** — switching from one mode to another (e.g., Code → Architect) uses whatever model you last selected for that mode, not the model from the mode you came from. This means you can assign different models to different modes:
