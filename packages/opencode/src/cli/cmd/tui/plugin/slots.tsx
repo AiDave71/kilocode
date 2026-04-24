@@ -1,6 +1,6 @@
 import type { TuiPluginApi, TuiSlotContext, TuiSlotMap, TuiSlotProps } from "@kilocode/plugin/tui"
 import { createSlot, createSolidSlotRegistry, type JSX, type SolidPlugin } from "@opentui/solid"
-import { children } from "solid-js" // kilocode_change
+import { children, mergeProps } from "solid-js" // kilocode_change
 import { isRecord } from "@/util/record"
 
 type RuntimeSlotMap = TuiSlotMap<Record<string, object>>
@@ -24,14 +24,16 @@ let view: Slot = empty
 
 // kilocode_change start - stabilize fallback children so replace-mode slots
 // don't recreate stateful defaults like the session prompt on prop changes.
+// mergeProps (instead of spread) preserves SolidJS prop reactivity so things
+// like ref, visible, disabled, on_submit keep flowing through to the slot.
 export const Slot = <Name extends string>(props: TuiSlotProps<Name>) => {
   const value = children(() => props.children)
-  return view({
-    ...props,
+  const merged = mergeProps(props, {
     get children() {
       return value()
     },
-  } as TuiSlotProps<Name>)
+  })
+  return view(merged as TuiSlotProps<Name>)
 }
 // kilocode_change end
 
