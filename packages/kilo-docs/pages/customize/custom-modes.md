@@ -232,6 +232,18 @@ If you have existing `.kilocodemodes` or `custom_modes.yaml` files from the VSCo
 
 Default legacy mode slugs (`code`, `build`, `architect`, `ask`, `debug`, `orchestrator`) are skipped during migration since they map to built-in agents (`build` → `code`, `architect` → `plan`).
 
+### Legacy File Locations
+
+The current VSCode extension reads the legacy `custom_modes.yaml` file from its own global storage directory. Helpful for inspecting or fixing the file before the one-time migration runs:
+
+| OS      | Path                                                                                                  |
+| ------- | ----------------------------------------------------------------------------------------------------- |
+| macOS   | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/custom_modes.yaml` |
+| Linux   | `~/.config/Code/User/globalStorage/kilocode.kilo-code/settings/custom_modes.yaml`                     |
+| Windows | `%APPDATA%\Code\User\globalStorage\kilocode.kilo-code\settings\custom_modes.yaml`                     |
+
+Project-level `.kilocodemodes` and workspace-scoped files are handled by the CLI backend that the extension delegates to — see the [CLI tab](#cli) for the full load-order table. After the extension migrates on startup, the legacy file is no longer consulted; remove new modes through the extension UI instead of editing `custom_modes.yaml` directly.
+
 {% /tab %}
 {% tab label="CLI" %}
 
