@@ -4,8 +4,12 @@ import { createMemo, createResource, Show } from "solid-js"
 import { Process } from "@/util"
 
 const id = "internal:kilo-sidebar-pr"
+const GH_PROBE_TTL = 300_000
 
 type Pr = { number: number; title: string }
+
+let ghAvailable: boolean | undefined
+let ghProbeTime = 0
 
 function wait(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -29,6 +33,12 @@ function wait(ms: number, signal: AbortSignal) {
 }
 
 async function lookup(cwd: string, branch: string): Promise<Pr | null> {
+  const ctrl = new AbortController()
+  const timer = wait(15_000, ctrl.signal).then(() => ctrl.abort())
+  const ok = await probeGh(cwd, ctrl.signal).finally(() => ctrl.abort())
+  await timer.catch(() => undefined)
+  if (!ok) return null
+
   // Try the tracking ref first (works when PR was checked out via `gh pr checkout`
   // or when the branch's upstream is a fork). Fall back to an explicit branch
   // lookup (works for same-repo branches pushed to origin).
@@ -57,6 +67,23 @@ async function lookup(cwd: string, branch: string): Promise<Pr | null> {
     }
   }
   return null
+}
+
+async function probeGh(cwd: string, signal: AbortSignal): Promise<boolean> {
+  const now = Date.now()
+  if (ghAvailable !== undefined && now - ghProbeTime < GH_PROBE_TTL) {
+    return ghAvailable
+  }
+
+  const res = await Process.text(["gh", "--version"], {
+    cwd,
+    abort: signal,
+    nothrow: true,
+    timeout: 1_000,
+  })
+  ghAvailable = res.code === 0
+  ghProbeTime = Date.now()
+  return ghAvailable
 }
 
 function View(props: { api: TuiPluginApi }) {
