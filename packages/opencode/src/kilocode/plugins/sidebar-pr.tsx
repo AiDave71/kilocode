@@ -8,7 +8,10 @@ const GH_PROBE_TTL = 300_000
 
 type Pr = { number: number; title: string }
 type Item = Partial<Pr> & { headRefOid?: string }
-type Repo = { nameWithOwner?: unknown; parent?: { nameWithOwner?: unknown } | null }
+type Repo = {
+  nameWithOwner?: unknown
+  parent?: { nameWithOwner?: unknown; name?: unknown; owner?: { login?: unknown } } | null
+}
 
 let ghPath: string | null | undefined
 let ghProbeTime = 0
@@ -115,10 +118,17 @@ async function lookupParent(cwd: string, signal: AbortSignal): Promise<string | 
   try {
     const data = JSON.parse(text) as Repo
     if (typeof data.nameWithOwner !== "string") return null
-    if (!data.parent || typeof data.parent.nameWithOwner !== "string") return null
-    if (data.parent.nameWithOwner === data.nameWithOwner) return null
+    if (!data.parent) return null
 
-    return data.parent.nameWithOwner
+    const parent =
+      typeof data.parent.nameWithOwner === "string"
+        ? data.parent.nameWithOwner
+        : typeof data.parent.owner?.login === "string" && typeof data.parent.name === "string"
+          ? `${data.parent.owner.login}/${data.parent.name}`
+          : null
+    if (!parent || parent === data.nameWithOwner) return null
+
+    return parent
   } catch {
     return null
   }
