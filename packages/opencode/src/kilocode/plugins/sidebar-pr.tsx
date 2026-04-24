@@ -7,6 +7,8 @@ const id = "internal:kilo-sidebar-pr"
 const GH_PROBE_TTL = 300_000
 
 type Pr = { number: number; title: string }
+type Item = Partial<Pr> & { headRefOid?: string }
+type Repo = { nameWithOwner?: unknown; parent?: { nameWithOwner?: unknown } | null }
 
 let ghPath: string | null | undefined
 let ghProbeTime = 0
@@ -64,36 +66,84 @@ async function lookup(cwd: string, branch: string): Promise<Pr | null> {
       }
     }
 
-    return await lookupBySha(cwd, ctrl.signal)
+    const head = await lookupHead(cwd, ctrl.signal)
+    if (!head) return null
+
+    const local = await lookupBySha(cwd, head, undefined, ctrl.signal)
+    if (local) return local
+
+    const parent = await lookupParent(cwd, ctrl.signal)
+    if (!parent) return null
+
+    const pr = await lookupByHead(cwd, branch, head, parent, ctrl.signal)
+    if (pr) return pr
+
+    return await lookupBySha(cwd, head, parent, ctrl.signal)
   } finally {
     ctrl.abort()
     await deadline.catch(() => undefined)
   }
 }
 
-async function lookupBySha(cwd: string, signal: AbortSignal): Promise<Pr | null> {
-  const sha = await Process.text(["git", "rev-parse", "HEAD"], {
+async function lookupHead(cwd: string, signal: AbortSignal): Promise<string | null> {
+  const res = await Process.text(["git", "rev-parse", "HEAD"], {
     cwd,
     abort: signal,
     nothrow: true,
     timeout: 1_000,
   })
-  if (sha.code !== 0) return null
+  if (res.code !== 0) return null
 
-  const head = sha.text.trim()
+  const head = res.text.trim()
   if (!head) return null
 
+  return head
+}
+
+async function lookupParent(cwd: string, signal: AbortSignal): Promise<string | null> {
+  const res = await Process.text(["gh", "repo", "view", "--json", "nameWithOwner,parent"], {
+    cwd,
+    abort: signal,
+    nothrow: true,
+    timeout: 1_000,
+  })
+  if (res.code !== 0) return null
+
+  const text = res.text.trim()
+  if (!text) return null
+
+  try {
+    const data = JSON.parse(text) as Repo
+    if (typeof data.nameWithOwner !== "string") return null
+    if (!data.parent || typeof data.parent.nameWithOwner !== "string") return null
+    if (data.parent.nameWithOwner === data.nameWithOwner) return null
+
+    return data.parent.nameWithOwner
+  } catch {
+    return null
+  }
+}
+
+async function lookupByHead(
+  cwd: string,
+  branch: string,
+  head: string,
+  repo: string,
+  signal: AbortSignal,
+): Promise<Pr | null> {
   const res = await Process.text(
     [
       "gh",
       "pr",
       "list",
+      "-R",
+      repo,
       "--state",
       "open",
-      "--search",
-      `${head} is:pr`,
+      "--head",
+      branch,
       "--limit",
-      "5",
+      "10",
       "--json",
       "number,title,headRefOid",
     ],
@@ -109,18 +159,61 @@ async function lookupBySha(cwd: string, signal: AbortSignal): Promise<Pr | null>
   const text = res.text.trim()
   if (!text) return null
 
-  const items = JSON.parse(text) as Array<Partial<Pr> & { headRefOid?: string }>
-  if (!Array.isArray(items) || items.length === 0) return null
+  return select(text, head)
+}
 
-  // Only accept a PR whose HEAD matches ours exactly — avoids returning a
-  // random PR that merely references the SHA in a commit message.
-  for (const item of items) {
-    if (item.headRefOid === head && typeof item.number === "number" && typeof item.title === "string") {
+async function lookupBySha(
+  cwd: string,
+  head: string,
+  repo: string | undefined,
+  signal: AbortSignal,
+): Promise<Pr | null> {
+  const cmd = [
+    "gh",
+    "pr",
+    "list",
+    ...(repo ? ["-R", repo] : []),
+    "--state",
+    "open",
+    "--search",
+    `${head} is:pr`,
+    "--limit",
+    "5",
+    "--json",
+    "number,title,headRefOid",
+  ]
+  const res = await Process.text(cmd, {
+    cwd,
+    abort: signal,
+    nothrow: true,
+    timeout: 1_000,
+  })
+  if (res.code !== 0) return null
+
+  const text = res.text.trim()
+  if (!text) return null
+
+  return select(text, head)
+}
+
+function select(text: string, head: string): Pr | null {
+  try {
+    const items = JSON.parse(text) as Item[]
+    if (!Array.isArray(items) || items.length === 0) return null
+
+    // Only accept a PR whose HEAD matches ours exactly — avoids returning a
+    // random PR that merely references the SHA in a commit message.
+    for (const item of items) {
+      if (item.headRefOid !== head) continue
+      if (typeof item.number !== "number") continue
+      if (typeof item.title !== "string") continue
       return { number: item.number, title: item.title }
     }
-  }
 
-  return null
+    return null
+  } catch {
+    return null
+  }
 }
 
 function probeGh(): string | null {
