@@ -133,12 +133,20 @@ async function fetchHubSummary(baseUrl: string, signal?: AbortSignal): Promise<H
   if (audit.status === "fulfilled") {
     const gates = (audit.value?.gates ?? audit.value ?? []) as Array<{ status: string }>
     summary.audit.total = gates.length
-    summary.audit.passing = gates.filter((g) => g.status === "pass" || g.status === "passing").length
-    summary.audit.failing = gates.filter((g) => g.status === "fail" || g.status === "failing").length
+    // kilocode_change: backend returns UPPERCASE statuses (PASS/FAIL/...);
+    // case-insensitive match to keep frontend resilient.
+    const norm = (s: string): string => (s ?? "").toLowerCase()
+    summary.audit.passing = gates.filter((g) => norm(g.status) === "pass" || norm(g.status) === "passing").length
+    summary.audit.failing = gates.filter((g) => norm(g.status) === "fail" || norm(g.status) === "failing").length
     summary.audit.unknown = summary.audit.total - summary.audit.passing - summary.audit.failing
   }
 
-  if (prs.status === "fulfilled" && Array.isArray(prs.value?.prs)) {
+  // kilocode_change: backend GET /api/prs/queue returns array under field `queue`,
+  // not `prs` (verified via cross-repo contract audit). Read `queue` first, then
+  // fall back to legacy field names for resilience.
+  if (prs.status === "fulfilled" && Array.isArray(prs.value?.queue)) {
+    summary.prs = prs.value.queue.slice(0, 16)
+  } else if (prs.status === "fulfilled" && Array.isArray(prs.value?.prs)) {
     summary.prs = prs.value.prs.slice(0, 16)
   } else if (prs.status === "fulfilled" && Array.isArray(prs.value)) {
     summary.prs = prs.value.slice(0, 16)
