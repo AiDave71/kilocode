@@ -314,8 +314,14 @@ function normalizeMcpEntry(raw: Record<string, unknown>): Record<string, unknown
 }
 
 function isSafeId(id: string): boolean {
-  if (!id || id.includes("..") || id.includes("/") || id.includes("\\")) return false
-  return /^[\w\-@.]+$/.test(id)
+  // kilocode_change: previous regex `^[\w\-@.]+$` accepted leading "." (e.g.
+  // ".bashrc"), leading "@" alone (e.g. "@evil"), and Unicode bidi/RTL chars
+  // → install-name spoofing risk on the destination filesystem. Tightened to
+  // npm-style: optional @scope/name with explicit lowercase + leading-char rules.
+  if (!id || id.length > 214) return false
+  if (id.includes("..") || id.includes("/") || id.includes("\\")) return false
+  if (id.startsWith(".") || id.startsWith("-")) return false
+  return /^(@[a-z0-9][a-z0-9\-_.]*\/)?[a-z0-9][a-z0-9\-_.]*$/.test(id)
 }
 
 // Group name → opencode permission key mapping (mirrors ModesMigrator)

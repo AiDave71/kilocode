@@ -137,6 +137,31 @@ export class AutoUpdateService implements vscode.Disposable {
     this.log(`downloading ${signed.url} → ${target}`)
     await this.download(signed.url, target)
 
+    // kilocode_change: SHA256 + size verification before installVSIX. Without this,
+    // a compromised CDN, tampered storage, or MITM could swap the VSIX payload
+    // and the user would get a malicious extension installed unchallenged.
+    const crypto = await import("crypto")
+    const fileBuf = fs.readFileSync(target)
+    const gotSha = crypto.createHash("sha256").update(fileBuf).digest("hex").toLowerCase()
+    const wantSha = ((signed as { sha256?: string }).sha256 || vsix.sha256 || "").toLowerCase()
+    if (!wantSha || gotSha !== wantSha) {
+      try {
+        fs.unlinkSync(target)
+      } catch {
+        /* best-effort cleanup */
+      }
+      throw new Error(`VSIX integrity check failed (sha256 ${gotSha} != ${wantSha})`)
+    }
+    const wantSize = (signed as { size?: number }).size
+    if (typeof wantSize === "number" && fileBuf.byteLength !== wantSize) {
+      try {
+        fs.unlinkSync(target)
+      } catch {
+        /* */
+      }
+      throw new Error(`VSIX size mismatch (${fileBuf.byteLength} != ${wantSize})`)
+    }
+
     try {
       await vscode.commands.executeCommand(
         "workbench.extensions.action.installVSIX",
@@ -144,7 +169,19 @@ export class AutoUpdateService implements vscode.Disposable {
       )
     } catch (err) {
       this.log(`installVSIX command failed: ${stringifyError(err)}`)
+      try {
+        fs.unlinkSync(target)
+      } catch {
+        /* */
+      }
       throw err
+    } finally {
+      // Clean up staged VSIX after install attempt regardless of outcome
+      try {
+        if (fs.existsSync(target)) fs.unlinkSync(target)
+      } catch {
+        /* */
+      }
     }
 
     const choice = await vscode.window.showInformationMessage(
