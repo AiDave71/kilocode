@@ -11,6 +11,7 @@ import type { SpeechSettings, SpeechVoice, VoicePreset, PronunciationEntry } fro
 import { DEFAULT_SPEECH_SETTINGS } from "../../types/voice"
 import { SpeechProviderRegistry } from "../../data/speech-providers"
 import { speak, stop as stopSpeech, ensureAudioReady, setVolume } from "../../utils/speech-playback"
+import { synthesizeAzure } from "../../utils/tts-azure"
 import SettingsRow from "./SettingsRow"
 
 // Deep clone utility for settings
@@ -768,6 +769,98 @@ const SpeechTab: Component = () => {
                   Multi-Voice
                 </Switch>
               </SettingsRow>
+
+              {/* kilocode_change: Voice Cast — per-role voice assignments. Only shown when
+                   Multi-Voice Dialogue is enabled. Stores assignments under
+                   speech.multiVoiceAssignments and uses the existing speak() utility for preview. */}
+              <Show when={settings().multiVoiceMode}>
+                <SettingsRow
+                  title="Voice Cast"
+                  description="Assign a distinct voice to each role. Roles without an assignment fall back to the main voice."
+                >
+                  <div style={{ display: "flex", "flex-direction": "column", gap: "6px", width: "100%" }}>
+                    <For each={["You", "System", "Architect", "Coder", "Reviewer", "Critic"] as const}>
+                      {(role) => {
+                        const assignments = (): Record<string, string> =>
+                          ((settings() as unknown as { multiVoiceAssignments?: Record<string, string> })
+                            .multiVoiceAssignments) ?? {}
+                        const currentVoice = (): string => assignments()[role] ?? ""
+                        const updateAssignment = (voiceId: string): void => {
+                          const next = { ...assignments(), [role]: voiceId }
+                          const updated = {
+                            ...settings(),
+                            multiVoiceAssignments: next,
+                          } as unknown as SpeechSettings
+                          setSettings(updated)
+                          setIsDirty(!settingsEqual(updated, originalSettings()))
+                        }
+                        const playRolePreview = async (): Promise<void> => {
+                          const vid = currentVoice() || settings().azure.voiceId
+                          const region = settings().azure.region
+                          const apiKey = getApiKey()
+                          if (!vid || !region || !apiKey) return
+                          try {
+                            const blob = await synthesizeAzure(`This is the ${role} voice.`, {
+                              region,
+                              apiKey,
+                              voiceId: vid,
+                              pitch: settings().tuning.pitch,
+                              rate: settings().tuning.rate,
+                              audioFormat: settings().tuning.audioFormat,
+                            })
+                            const url = URL.createObjectURL(blob)
+                            const audio = new Audio(url)
+                            audio.onended = (): void => URL.revokeObjectURL(url)
+                            await audio.play()
+                          } catch (err) {
+                            // Real failure paths (auth, network) — surface via console;
+                            // user-facing errors come from the existing main preview button.
+                            console.error(`[SpeechCast] preview ${role} failed`, err)
+                          }
+                        }
+                        return (
+                          <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+                            <span style={{ "min-width": "80px", "font-size": "12px", "font-weight": "500" }}>
+                              {role}
+                            </span>
+                            <select
+                              value={currentVoice()}
+                              onChange={(e) => updateAssignment(e.currentTarget.value)}
+                              style={{
+                                flex: "1",
+                                padding: "3px 6px",
+                                background: "var(--vscode-input-background)",
+                                color: "var(--vscode-input-foreground)",
+                                border: "1px solid var(--vscode-input-border)",
+                                "border-radius": "3px",
+                                "font-size": "12px",
+                              }}
+                              aria-label={`${role} voice`}
+                            >
+                              <option value="">— Use main voice —</option>
+                              <For each={providerVoices()}>
+                                {(v) => (
+                                  <option value={v.id}>
+                                    {v.name} · {v.locale}
+                                  </option>
+                                )}
+                              </For>
+                            </select>
+                            <Button
+                              variant="secondary"
+                              size="small"
+                              onClick={playRolePreview}
+                              title={`Preview ${role} voice`}
+                            >
+                              ▶
+                            </Button>
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </SettingsRow>
+              </Show>
 
               {/* Debug Mode */}
               <SettingsRow

@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, on, Show } from "solid-js"
+import { Component, createSignal, createEffect, on, Show, onMount, onCleanup } from "solid-js"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { Tabs } from "@kilocode/kilo-ui/tabs"
 import { Button } from "@kilocode/kilo-ui/button"
@@ -27,6 +27,7 @@ import MemoryTab from "./MemoryTab"
 import TrainingTab from "./TrainingTab"
 import GovernanceTab from "./GovernanceTab"
 import HubTab from "./HubTab"
+import SettingsCommandPalette from "./SettingsCommandPalette"
 
 import CommitMessageTab from "./CommitMessageTab"
 import ExperimentalTab from "./ExperimentalTab"
@@ -48,6 +49,17 @@ const Settings: Component<SettingsProps> = (props) => {
   const session = useSession()
   const [active, setActive] = createSignal(props.tab ?? "models")
   const [errorExpanded, setErrorExpanded] = createSignal(false)
+  // kilocode_change: command palette (Cmd/Ctrl+K) for fuzzy-search across all 24 tabs
+  const [paletteOpen, setPaletteOpen] = createSignal(false)
+  const onGlobalKey = (e: KeyboardEvent): void => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault()
+      setPaletteOpen(true)
+    }
+  }
+  onMount(() => window.addEventListener("keydown", onGlobalKey))
+  onCleanup(() => window.removeEventListener("keydown", onGlobalKey))
+
   // kilocode_change: real tab search filter — applies via DOM walker so we don't have to
   // wrap each of 24 tab triggers in <Show>. Trigger element is queried via the .label child.
   const [tabFilter, setTabFilter] = createSignal("")
@@ -388,6 +400,13 @@ const Settings: Component<SettingsProps> = (props) => {
           </div>
         </div>
       </Show>
+
+      {/* kilocode_change: Cmd/Ctrl+K palette overlay — jumps to any of 24 settings tabs */}
+      <SettingsCommandPalette
+        open={paletteOpen()}
+        onClose={() => setPaletteOpen(false)}
+        onJump={(tab) => onTabChange(tab)}
+      />
     </div>
   )
 }

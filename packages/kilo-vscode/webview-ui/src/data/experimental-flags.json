@@ -1,0 +1,14 @@
+{
+  "_comment": "Stability metadata for experimental feature flags shown on Settings → Experimental. Updated 2026-04-27.",
+  "remote_control": { "stability": "beta", "since": "2025-Q4" },
+  "share": { "stability": "stable" },
+  "formatter": { "stability": "stable" },
+  "lsp": { "stability": "rc", "since": "2026-Q1" },
+  "disable_paste_summary": { "stability": "stable" },
+  "batch_tool": { "stability": "beta", "requires": ["lsp"], "since": "2026-Q1" },
+  "agent_manager": { "stability": "beta" },
+  "console": { "stability": "alpha", "since": "2026-Q1" },
+  "concurrent_tools": { "stability": "beta" },
+  "remote_workspaces": { "stability": "alpha", "requires": ["remote_control"] },
+  "mcp_timeout": { "stability": "stable" }
+}

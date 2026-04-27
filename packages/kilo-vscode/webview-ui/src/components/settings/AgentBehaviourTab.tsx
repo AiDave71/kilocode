@@ -17,10 +17,11 @@ import ModeEditView from "./ModeEditView"
 import ModeCreateView from "./ModeCreateView"
 import McpEditView from "./McpEditView"
 import WorkflowsTab from "./agent-behaviour/WorkflowsTab"
+import PresetsTab from "./agent-behaviour/PresetsTab"
 import { parseImport, MAX_IMPORT_SIZE } from "./mode-io"
 import type { ImportError } from "./mode-io"
 
-type SubtabId = "agents" | "mcpServers" | "rules" | "workflows" | "skills"
+type SubtabId = "agents" | "mcpServers" | "rules" | "workflows" | "skills" | "presets"
 
 interface SubtabConfig {
   id: SubtabId
@@ -33,6 +34,7 @@ const subtabs: SubtabConfig[] = [
   { id: "rules", labelKey: "settings.agentBehaviour.subtab.rules" },
   { id: "workflows", labelKey: "settings.agentBehaviour.subtab.workflows" },
   { id: "skills", labelKey: "settings.agentBehaviour.subtab.skills" },
+  { id: "presets", labelKey: "settings.agentBehaviour.subtab.presets" },
 ]
 
 interface SelectOption {
@@ -1080,6 +1082,8 @@ const AgentBehaviourTab: Component = () => {
         return <WorkflowsTab />
       case "skills":
         return renderSkillsSubtab()
+      case "presets":
+        return <PresetsTab />
       default:
         return null
     }

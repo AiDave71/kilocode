@@ -8,6 +8,47 @@ import { useLanguage } from "../../context/language"
 import { useVSCode } from "../../context/vscode"
 import type { ExtensionMessage } from "../../types/messages"
 import SettingsRow from "./SettingsRow"
+import flagMeta from "../../data/experimental-flags.json"
+
+// kilocode_change: real stability badges + dependency check + request-feature link
+type Stability = "alpha" | "beta" | "rc" | "stable"
+interface FlagMeta {
+  stability: Stability
+  requires?: string[]
+  since?: string
+}
+const STABILITY_COLORS: Record<Stability, string> = {
+  alpha: "#e11d48",
+  beta: "#f59e0b",
+  rc: "#3b82f6",
+  stable: "#10b981",
+}
+const FLAG_META: Record<string, FlagMeta> = flagMeta as never
+
+const StabilityBadge: Component<{ flagKey: string }> = (props) => {
+  const meta = (): FlagMeta | undefined => FLAG_META[props.flagKey]
+  return (
+    <Show when={meta()}>
+      <span
+        title={`${meta()!.stability.toUpperCase()}${meta()!.since ? " · since " + meta()!.since : ""}`}
+        style={{
+          display: "inline-block",
+          padding: "1px 6px",
+          "margin-left": "8px",
+          "border-radius": "3px",
+          "background-color": STABILITY_COLORS[meta()!.stability],
+          color: "white",
+          "font-size": "10px",
+          "font-weight": "600",
+          "text-transform": "uppercase",
+          "vertical-align": "middle",
+        }}
+      >
+        {meta()!.stability}
+      </span>
+    </Show>
+  )
+}
 
 interface ShareOption {
   value: string
@@ -197,6 +238,40 @@ const ExperimentalTab: Component = () => {
           />
         </SettingsRow>
       </Card>
+
+      {/* kilocode_change: real stability legend + dependency-aware request-feature link */}
+      <div style={{ "margin-top": "12px", "font-size": "11px", color: "var(--vscode-descriptionForeground)" }}>
+        <strong>Stability:</strong>{" "}
+        <span style={{ color: STABILITY_COLORS.stable }}>● stable</span>{" "}
+        <span style={{ color: STABILITY_COLORS.rc }}>● rc</span>{" "}
+        <span style={{ color: STABILITY_COLORS.beta }}>● beta</span>{" "}
+        <span style={{ color: STABILITY_COLORS.alpha }}>● alpha</span>
+        <span style={{ "margin-left": "12px" }}>
+          ·{" "}
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault()
+              const ctx = {
+                version: (config() as { version?: string }).version ?? "unknown",
+                platform: navigator.platform,
+                experimentalFlags: experimental(),
+                ts: new Date().toISOString(),
+              }
+              const body = encodeURIComponent(
+                "## Feature Request\n\n<!-- describe -->\n\n```json\n" +
+                  JSON.stringify(ctx, null, 2) +
+                  "\n```",
+              )
+              const url = `https://github.com/Kilo-Org/kilocode/issues/new?labels=feature-request&body=${body}`
+              vscode.postMessage({ type: "openExternal", url })
+            }}
+            style={{ color: "var(--vscode-textLink-foreground)" }}
+          >
+            Request a feature (auto-fills context)
+          </a>
+        </span>
+      </div>
 
       {/* Tool toggles */}
       <Show when={config().tools && Object.keys(config().tools ?? {}).length > 0}>
