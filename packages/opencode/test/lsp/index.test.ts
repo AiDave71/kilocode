@@ -84,7 +84,7 @@ describe("lsp.spawn", () => {
       await Instance.provide({
         directory: tmp.path,
         fn: async () => {
-          const result = await LSPServer.Typescript.spawn(tmp.path, fakeCtx)
+          const result = await LSPServer.Typescript.spawn(tmp.path)
           expect(result).toBeDefined()
           expect(tsgoSpy).toHaveBeenCalledWith(tmp.path)
           expect(spawnSpy).toHaveBeenCalled()
@@ -106,7 +106,7 @@ describe("lsp.spawn", () => {
     // @ts-expect-error
     Flag.KILO_EXPERIMENTAL_LSP_TOOL = false
     try {
-      const result = await LSPServer.Typescript.spawn("/tmp/any", fakeCtx)
+      const result = await LSPServer.Typescript.spawn("/tmp/any")
       expect(result).toBeUndefined()
     } finally {
       // @ts-expect-error

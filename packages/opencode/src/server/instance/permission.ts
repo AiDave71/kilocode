@@ -5,6 +5,7 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { errors } from "../error"
+import { jsonRequest } from "./trace"
 import { lazy } from "../../util/lazy"
 
 export const PermissionRoutes = lazy(() =>

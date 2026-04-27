@@ -24,7 +24,7 @@ describe("typescript lightweight mode", () => {
       // @ts-expect-error - override static flag
       Flag.KILO_EXPERIMENTAL_LSP_TOOL = false
       try {
-        const result = await LSPServer.Typescript.spawn("/tmp/any", fakeCtx)
+        const result = await LSPServer.Typescript.spawn("/tmp/any")
         expect(result).toBeUndefined()
       } finally {
         // @ts-expect-error
@@ -39,7 +39,7 @@ describe("typescript lightweight mode", () => {
       const spy = spyOn(TsCheck, "native_tsgo").mockResolvedValue(undefined)
 
       try {
-        const result = await LSPServer.Typescript.spawn("/tmp/any", fakeCtx)
+        const result = await LSPServer.Typescript.spawn("/tmp/any")
         expect(spy).toHaveBeenCalled()
         expect(result).toBeUndefined() // undefined because mock returns no binary
       } finally {

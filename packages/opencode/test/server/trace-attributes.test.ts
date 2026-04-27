@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { paramToAttributeKey, requestAttributes } from "../../src/server/routes/instance/trace"
+import { paramToAttributeKey, requestAttributes } from "../../src/server/instance/trace"
 
 function fakeContext(method: string, url: string, params: Record<string, string>) {
   return {
