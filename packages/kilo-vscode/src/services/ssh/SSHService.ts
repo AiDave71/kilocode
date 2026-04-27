@@ -214,8 +214,19 @@ export class SSHService implements vscode.Disposable {
     if (lower.includes("permission denied") || lower.includes("authentication failed") || lower.includes("auth fail")) return "AUTH_FAILED"
     if (lower.includes("timed out") || lower.includes("timeout") || lower.includes("connection timed out")) return "TIMEOUT"
     if (lower.includes("host key") || lower.includes("man-in-the-middle") || lower.includes("offending key")) return "HOST_KEY_MISMATCH"
-    if (lower.includes("sftp") || lower.includes("no such file") || lower.includes("failure")) return "SFTP_ERROR"
+    // kilocode_change: was matching generic "failure" → mis-classified host-key/auth errors as SFTP
+    if (lower.includes("sftp") || lower.includes("no such file") || lower.includes("permission denied (publickey")) return "SFTP_ERROR"
     return "UNKNOWN"
+  }
+
+  /** Clear the entire error log (used by webview "Clear errors" button). */
+  clearErrors(): void {
+    this.errorLog.length = 0
+  }
+
+  /** Get a copy of the current error log (for webview re-hydration). */
+  getErrors(): SSHError[] {
+    return this.errorLog.slice()
   }
 
   /** Record an SSH error and notify listeners. */
@@ -260,6 +271,8 @@ export class SSHService implements vscode.Disposable {
       jumpHost: p.jumpHost,
       group: p.group ?? "",
       labels: Array.isArray(p.labels) ? p.labels : [],
+      // kilocode_change: was being stripped on round-trip — used by buildSSHCommand
+      connectionTimeoutMs: p.connectionTimeoutMs,
     }))
   }
 
@@ -482,7 +495,7 @@ export class SSHService implements vscode.Disposable {
         name: `SSH: ${profile.name}`,
         shellPath: this.getShellPath(),
         shellArgs: this.getShellArgs(sshCommand),
-        iconPath: new vscode.ThemeIcon("remote"),
+        iconPath: new vscode.ThemeIcon("vm"),
       })
 
       session.terminal = terminal

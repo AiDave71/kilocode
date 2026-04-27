@@ -20,6 +20,7 @@ import { useWorktreeMode } from "../../context/worktree-mode"
 import { ModelSelector } from "../shared/ModelSelector"
 import { ModeSwitcher } from "../shared/ModeSwitcher"
 import { ThinkingSelector } from "../shared/ThinkingSelector"
+import VoiceSelector from "./VoiceSelector"
 import { useFileMention } from "../../hooks/useFileMention"
 import { useTerminalContext } from "../../hooks/useTerminalContext"
 import { hasTerminalMention } from "../../hooks/terminal-context-utils"
@@ -896,6 +897,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           </Show>
         </div>
         <div class="prompt-input-hint-actions">
+          {/* kilocode_change: Azure voice selector + preview Play, sits next to mic position */}
+          <VoiceSelector compact />
           <Tooltip value={language.t("prompt.action.enhance")} placement="top">
             <Button
               variant="ghost"

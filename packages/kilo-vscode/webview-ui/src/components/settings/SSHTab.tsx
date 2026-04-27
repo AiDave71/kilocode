@@ -20,6 +20,8 @@ interface SSHProfile {
   jumpHost: string
   group: string
   labels: string[]
+  // kilocode_change: previously absent — backend supports it; required for round-trip
+  connectionTimeoutMs?: number
 }
 
 interface SSHSession {
@@ -380,16 +382,20 @@ const SSHTab: Component = () => {
   const toggleDirectory = (entry: RemoteFileEntry) => {
     const profile = sftpProfile()
     if (!profile || !entry.isDirectory) return
+    // kilocode_change: capture pre-mutation state so the post-set check is correct.
+    // Previous code read expandedDirs() AFTER the setter mutated state, so the
+    // children-fetch branch never ran on expand and SFTP browsing was broken.
+    const wasExpanded = expandedDirs().has(entry.path)
     setExpandedDirs((prev) => {
       const next = new Set(prev)
-      if (next.has(entry.path)) {
+      if (wasExpanded) {
         next.delete(entry.path)
       } else {
         next.add(entry.path)
       }
       return next
     })
-    if (!expandedDirs().has(entry.path)) {
+    if (!wasExpanded) {
       // Was just expanded, fetch children
       vscode.postMessage({ type: "sshBrowseFiles", profileName: profile, path: entry.path } as never)
     }

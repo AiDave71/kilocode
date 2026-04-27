@@ -236,19 +236,42 @@ export class AutoUpdateService implements vscode.Disposable {
     })
   }
 
-  private async download(url: string, target: string): Promise<void> {
+  private async download(url: string, target: string, hops = 0): Promise<void> {
+    // kilocode_change: previously did not follow 3xx redirects — signed S3 / CloudFront
+    // URLs always redirect, so the redirect HTML body was being written as the VSIX,
+    // and VS Code's installVSIX then rejected the file. Cap at 5 hops to avoid loops.
+    const MAX_HOPS = 5
     return new Promise<void>((resolve, reject) => {
       const u = new URL(url)
       const lib = u.protocol === "https:" ? https : http
       const file = fs.createWriteStream(target)
-      lib.get(url, { timeout: HTTP_TIMEOUT_MS }, (res) => {
-        if ((res.statusCode ?? 0) >= 400) {
-          reject(new Error(`HTTP ${res.statusCode} on ${url}`)); res.resume(); return
-        }
-        res.pipe(file)
-        file.on("finish", () => file.close((err) => (err ? reject(err) : resolve())))
-        file.on("error", reject)
-      }).on("error", reject)
+      lib
+        .get(url, { timeout: HTTP_TIMEOUT_MS }, (res) => {
+          const status = res.statusCode ?? 0
+          if (status >= 300 && status < 400 && res.headers.location) {
+            // Don't write the redirect body — close the stream and recurse
+            file.close(() => {
+              if (hops >= MAX_HOPS) {
+                reject(new Error(`Too many redirects (${MAX_HOPS}) downloading ${url}`))
+                return
+              }
+              const next = new URL(res.headers.location as string, url).toString()
+              this.download(next, target, hops + 1).then(resolve, reject)
+            })
+            res.resume()
+            return
+          }
+          if (status >= 400) {
+            file.close()
+            reject(new Error(`HTTP ${status} on ${url}`))
+            res.resume()
+            return
+          }
+          res.pipe(file)
+          file.on("finish", () => file.close((err) => (err ? reject(err) : resolve())))
+          file.on("error", reject)
+        })
+        .on("error", reject)
     })
   }
 

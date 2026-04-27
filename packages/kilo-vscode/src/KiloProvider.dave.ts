@@ -298,6 +298,12 @@ export class DaveProviderExtensions {
             this.postMessage({ type: "sshErrors", errors: errors.map((e: { message: string; code: string; profileName: string; timestamp: number }) => ({ message: e.message, code: e.code, profileName: e.profileName, timestamp: e.timestamp })) } as never)
           }
           break
+        case "sshClearErrors":
+          // kilocode_change: previously declared in V4SubsystemRequest but never wired —
+          // the webview's "Clear errors" button was a silent no-op against the backend.
+          this.sshService?.clearErrors()
+          this.postMessage({ type: "sshErrors", errors: [] } as never)
+          break
         case "sshTailLogs":
           if (m.action === "stop") this.sshService?.stopLogTail(m.profileName)
           else this.sshService?.startLogTail(m.profileName, m.service)

@@ -26,6 +26,7 @@ import RoutingTab from "./RoutingTab"
 import MemoryTab from "./MemoryTab"
 import TrainingTab from "./TrainingTab"
 import GovernanceTab from "./GovernanceTab"
+import HubTab from "./HubTab"
 
 import CommitMessageTab from "./CommitMessageTab"
 import ExperimentalTab from "./ExperimentalTab"
@@ -181,6 +182,10 @@ const Settings: Component<SettingsProps> = (props) => {
             <Icon name="checklist" />
             <span class="label">Governance</span>
           </Tabs.Trigger>
+          <Tabs.Trigger value="hub">
+            <Icon name="server" />
+            <span class="label">Hub</span>
+          </Tabs.Trigger>
           <Tabs.Trigger value="speech">
             <Icon name="speech-bubble" />
             <span class="label">Speech</span>
@@ -275,6 +280,10 @@ const Settings: Component<SettingsProps> = (props) => {
         <Tabs.Content value="governance">
           <h3>Governance & Approvals</h3>
           <GovernanceTab />
+        </Tabs.Content>
+        <Tabs.Content value="hub">
+          <h3>Hub — Operations Surface</h3>
+          <HubTab />
         </Tabs.Content>
         <Tabs.Content value="speech">
           <h3>Speech</h3>
