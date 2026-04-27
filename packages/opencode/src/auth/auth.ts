@@ -60,8 +60,15 @@ export const layer = Layer.effect(
     const all = Effect.fn("Auth.all")(function* () {
       if (process.env.KILO_AUTH_CONTENT) {
         try {
-          return JSON.parse(process.env.KILO_AUTH_CONTENT)
-        } catch (err) {}
+          // kilocode_change: validate via decode like the file branch + log on failure
+          // (was silently swallowing parse errors, hiding bad CI env-var content)
+          const parsed = JSON.parse(process.env.KILO_AUTH_CONTENT) as Record<string, unknown>
+          return Record.filterMap(parsed, (value) => Result.fromOption(decode(value), () => undefined))
+        } catch (err) {
+          yield* Effect.logWarning("KILO_AUTH_CONTENT JSON.parse failed; falling back to auth.json").pipe(
+            Effect.annotateLogs({ error: err instanceof Error ? err.message : String(err) }),
+          )
+        }
       }
 
       const data = (yield* fsys.readJson(file).pipe(Effect.orElseSucceed(() => ({})))) as Record<string, unknown>

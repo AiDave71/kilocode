@@ -1254,7 +1254,7 @@ export class GovernanceService implements vscode.Disposable {
 		const criticalFindings: string[] = []
 		const recommendations: string[] = []
 
-		// Define the 7 expected subsystems and their audit criteria
+		// Define the 10 expected subsystems and their audit criteria
 		const expectedSubsystems = [
 			"governance",
 			"ssh",
@@ -1268,15 +1268,21 @@ export class GovernanceService implements vscode.Disposable {
 			"speech",
 		]
 
-		// Weight map for subsystem importance (must sum to 1.0)
+		// kilocode_change: weight keys MUST match expectedSubsystems entries; previous map
+		// referenced ghost keys (security/telemetry/configuration/diagnostics) that never
+		// existed → every subsystem fell back to 1/10 default → audit scoring was a lie.
+		// Now sums to 1.0 with one entry per real subsystem.
 		const subsystemWeights: Record<string, number> = {
-			governance: 0.25,
-			hermes: 0.15,
+			governance: 0.20,
+			ssh: 0.10,
+			vps: 0.10,
+			zeroClaw: 0.10,
+			routing: 0.10,
+			memory: 0.10,
+			training: 0.05,
+			workstation: 0.05,
+			hermes: 0.10,
 			speech: 0.10,
-			security: 0.20,
-			telemetry: 0.10,
-			configuration: 0.10,
-			diagnostics: 0.10,
 		}
 
 		for (const subsystemName of expectedSubsystems) {

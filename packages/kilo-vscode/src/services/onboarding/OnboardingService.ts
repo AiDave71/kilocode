@@ -54,10 +54,19 @@ export class OnboardingService {
 
     await this.markComplete(result)
 
-    // Fire-and-forget connection test (the user already moved on)
-    void this.testConnections(result).then((tests) => {
-      this.showConnectionResults(tests)
-    })
+    // kilocode_change: previously had no .catch — would surface as unhandled promise
+    // rejection on transient network errors during onboarding. Now logs to user
+    // and never crashes the activation flow.
+    void this.testConnections(result)
+      .then((tests) => {
+        this.showConnectionResults(tests)
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        void vscode.window.showWarningMessage(
+          `KiloCode: connection test failed — ${msg}. You can re-run from the status bar.`,
+        )
+      })
 
     return result
   }
