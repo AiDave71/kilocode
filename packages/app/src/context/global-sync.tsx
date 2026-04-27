@@ -264,6 +264,7 @@ function createGlobalSync() {
     children.pin(directory)
     const promise = Promise.resolve().then(async () => {
       const child = children.ensureChild(directory)
+      child[1]("bootstrapPromise", promise!)
       const cache = children.vcsCache.get(directory)
       if (!cache) return
       const sdk = sdkFor(directory)

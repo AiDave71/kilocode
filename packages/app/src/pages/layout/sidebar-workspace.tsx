@@ -471,7 +471,7 @@ export const LocalWorkspace = (props: {
         mobile={props.mobile}
         ctx={props.ctx}
         showNew={() => false}
-        loading={loading}
+        loading={() => query.isLoading}
         sessions={sessions}
         hasMore={hasMore}
         loadMore={loadMore}
