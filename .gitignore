@@ -1,6 +1,10 @@
 .husky/_
 .DS_Store
 node_modules
+.claude/
+*.vsix
+build-release/
+docs/audit/
 .worktrees
 .sst
 .env

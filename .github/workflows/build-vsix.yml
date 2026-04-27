@@ -1,0 +1,102 @@
+name: Build VSIX Extension
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version_suffix:
+        description: "Version suffix appended to package.json version (e.g. canary.2, beta.1)"
+        default: ""
+        required: false
+
+jobs:
+  build-vsix:
+    name: Build KiloCode MAOS VSIX
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install root dependencies
+        run: bun install
+
+      - name: Install vsce
+        run: npm install -g @vscode/vsce
+
+      - name: Prepare CLI binary
+        working-directory: packages/kilo-vscode
+        run: bun run prepare:cli-binary
+
+      - name: Rebuild SDK
+        run: bun run --cwd packages/sdk/js build
+
+      - name: Bundle extension (production)
+        working-directory: packages/kilo-vscode
+        run: node esbuild.js --production
+
+      - name: Determine VSIX filename
+        id: vsix_name
+        shell: pwsh
+        run: |
+          $pkg = Get-Content packages/kilo-vscode/package.json | ConvertFrom-Json
+          $ver = $pkg.version
+          $suffix = "${{ inputs.version_suffix }}"
+          if ($suffix) { $ver = "$ver-$suffix" }
+          $name = "kilocode-maos-$ver.vsix"
+          echo "vsix_name=$name" >> $env:GITHUB_OUTPUT
+          echo "vsix_version=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Package VSIX
+        working-directory: packages/kilo-vscode
+        run: vsce package --no-dependencies --out "${{ steps.vsix_name.outputs.vsix_name }}"
+
+      - name: Verify VSIX
+        working-directory: packages/kilo-vscode
+        shell: pwsh
+        run: |
+          $vsix = "${{ steps.vsix_name.outputs.vsix_name }}"
+          $size = (Get-Item $vsix).Length / 1MB
+          Write-Host "VSIX: $vsix — $([math]::Round($size, 2)) MB"
+          if ($size -lt 10) { throw "VSIX suspiciously small — check build output" }
+
+      - name: Upload VSIX as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kilocode-vsix-${{ steps.vsix_name.outputs.vsix_version }}
+          path: packages/kilo-vscode/${{ steps.vsix_name.outputs.vsix_name }}
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/kilo-vscode/${{ steps.vsix_name.outputs.vsix_name }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Summary
+        shell: pwsh
+        run: |
+          $vsix = "${{ steps.vsix_name.outputs.vsix_name }}"
+          $size = [math]::Round((Get-Item "packages/kilo-vscode/$vsix").Length / 1MB, 2)
+          @"
+          ### VSIX Built Successfully
+          | Field | Value |
+          |-------|-------|
+          | File | ``$vsix`` |
+          | Size | $size MB |
+          | Install in VS Code | Extensions → ⋯ → Install from VSIX |
+          | Install in code-server | ``code-server --install-extension $vsix`` |
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

@@ -17,6 +17,15 @@ import DisplayTab from "./DisplayTab"
 import AutocompleteTab from "./AutocompleteTab"
 import NotificationsTab from "./NotificationsTab"
 import ContextTab from "./ContextTab"
+import SpeechTab from "./SpeechTab"
+import SSHTab from "./SSHTab"
+import VPSTab from "./VPSTab"
+import ZeroClawTab from "./ZeroClawTab"
+import HermesTab from "./HermesTab"
+import RoutingTab from "./RoutingTab"
+import MemoryTab from "./MemoryTab"
+import TrainingTab from "./TrainingTab"
+import GovernanceTab from "./GovernanceTab"
 
 import CommitMessageTab from "./CommitMessageTab"
 import ExperimentalTab from "./ExperimentalTab"
@@ -96,7 +105,7 @@ const Settings: Component<SettingsProps> = (props) => {
         variant="settings"
         value={active()}
         onChange={onTabChange}
-        style={{ flex: 1, overflow: "hidden" }}
+        style={{ flex: 1, "min-height": 0, overflow: "hidden" }}
       >
         <Tabs.List>
           <Tabs.Trigger value="models">
@@ -140,6 +149,42 @@ const Settings: Component<SettingsProps> = (props) => {
             <span class="label">{language.t("settings.context.title")}</span>
           </Tabs.Trigger>
 
+          <Tabs.Trigger value="ssh">
+            <Icon name="terminal" />
+            <span class="label">SSH & Remote</span>
+          </Tabs.Trigger>
+          <Tabs.Trigger value="vps">
+            <Icon name="server" />
+            <span class="label">VPS & Infra</span>
+          </Tabs.Trigger>
+          <Tabs.Trigger value="hermes">
+            <Icon name="fork" />
+            <span class="label">Hermes</span>
+          </Tabs.Trigger>
+          <Tabs.Trigger value="zeroclaw">
+            <Icon name="shield" />
+            <span class="label">ZeroClaw</span>
+          </Tabs.Trigger>
+          <Tabs.Trigger value="routing">
+            <Icon name="fork" />
+            <span class="label">Provider Routing</span>
+          </Tabs.Trigger>
+          <Tabs.Trigger value="memory">
+            <Icon name="brain" />
+            <span class="label">Memory (Shiba)</span>
+          </Tabs.Trigger>
+          <Tabs.Trigger value="training">
+            <Icon name="sliders" />
+            <span class="label">Training & GPU</span>
+          </Tabs.Trigger>
+          <Tabs.Trigger value="governance">
+            <Icon name="checklist" />
+            <span class="label">Governance</span>
+          </Tabs.Trigger>
+          <Tabs.Trigger value="speech">
+            <Icon name="speech-bubble" />
+            <span class="label">Speech</span>
+          </Tabs.Trigger>
           <Tabs.Trigger value="commitMessage">
             <Icon name="edit" />
             <span class="label">{language.t("settings.commitMessage.title")}</span>
@@ -199,6 +244,42 @@ const Settings: Component<SettingsProps> = (props) => {
           <ContextTab />
         </Tabs.Content>
 
+        <Tabs.Content value="ssh">
+          <h3>SSH & Remote Systems</h3>
+          <SSHTab />
+        </Tabs.Content>
+        <Tabs.Content value="vps">
+          <h3>VPS & Infrastructure</h3>
+          <VPSTab />
+        </Tabs.Content>
+        <Tabs.Content value="hermes">
+          <h3>Hermes Pipeline</h3>
+          <HermesTab />
+        </Tabs.Content>
+        <Tabs.Content value="zeroclaw">
+          <h3>ZeroClaw Execution</h3>
+          <ZeroClawTab />
+        </Tabs.Content>
+        <Tabs.Content value="routing">
+          <h3>Provider Routing</h3>
+          <RoutingTab />
+        </Tabs.Content>
+        <Tabs.Content value="memory">
+          <h3>Memory (Shiba)</h3>
+          <MemoryTab />
+        </Tabs.Content>
+        <Tabs.Content value="training">
+          <h3>Training & GPU</h3>
+          <TrainingTab />
+        </Tabs.Content>
+        <Tabs.Content value="governance">
+          <h3>Governance & Approvals</h3>
+          <GovernanceTab />
+        </Tabs.Content>
+        <Tabs.Content value="speech">
+          <h3>Speech</h3>
+          <SpeechTab />
+        </Tabs.Content>
         <Tabs.Content value="commitMessage">
           <h3>{language.t("settings.commitMessage.title")}</h3>
           <CommitMessageTab />

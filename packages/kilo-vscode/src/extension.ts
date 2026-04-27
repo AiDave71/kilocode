@@ -1,13 +1,15 @@
 import * as vscode from "vscode"
 import { KiloProvider } from "./KiloProvider"
+import type { DaveProviderExtensions } from "./KiloProvider.dave"
 import { AgentManagerProvider } from "./agent-manager/AgentManagerProvider"
 import { VscodeHost } from "./agent-manager/vscode-host"
+import { KiloClawProvider } from "./kiloclaw/KiloClawProvider"
 import { DiffViewerProvider } from "./DiffViewerProvider"
 import { DiffVirtualProvider } from "./DiffVirtualProvider"
 import { SettingsEditorProvider } from "./SettingsEditorProvider"
 import { SubAgentViewerProvider } from "./SubAgentViewerProvider"
 import { EXTENSION_DISPLAY_NAME } from "./constants"
-import { KiloConnectionService } from "./services/cli-backend"
+import { KiloConnectionService, HealthRecoveryService } from "./services/cli-backend"
 import { registerAutocompleteProvider } from "./services/autocomplete"
 import { ensureBackendForAutocomplete } from "./services/autocomplete/ensure-backend"
 import { AutocompleteServiceManager } from "./services/autocomplete/AutocompleteServiceManager"
@@ -18,18 +20,67 @@ import { registerCodeActions, registerTerminalActions, KiloCodeActionProvider } 
 import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
+import { HermesClient, HermesPipeline, HermesStatusService, buildPreset, HERMES_PROVIDER_ID } from "./services/hermes"
+import { registerHermesCommands } from "./commands/hermes"
+import { SSHService } from "./services/ssh"
+import { VPSService } from "./services/vps"
+import { ZeroClawService } from "./services/zeroclaw"
+import { RoutingService } from "./services/routing"
+import { MemoryService } from "./services/memory"
+import { TrainingService } from "./services/training"
+import { GovernanceService } from "./services/governance"
+import { WorkstationProfileService } from "./services/workstation"
+import type { KiloClient } from "@kilocode/sdk/v2"
+import { KiloLogger } from "./services/KiloLogger"
+import { HubPanel } from "./panels/HubPanel"
+import { HubServicesService } from "./services/hub-services"
 
 // Activated via "onStartupFinished" (package.json) so that commands, code actions, keybindings,
 // autocomplete, commit-message generation, and URI deep links all work immediately — without
 // requiring the user to open a Kilo sidebar or panel first. The CLI backend is NOT spawned here;
 // it starts lazily when a webview connects or when ensureBackendForAutocomplete() triggers it.
 export function activate(context: vscode.ExtensionContext) {
-  console.log("Kilo Code extension is now active")
+  // Initialize centralized V4 logging (OutputChannel + debug mode toggle)
+  KiloLogger.initialize()
+  const extLog = KiloLogger.for("Extension")
+  extLog.info("Kilo Code extension activating")
+
+  // Register debug mode toggle command
+  context.subscriptions.push(
+    vscode.commands.registerCommand("kilo-code.v4.toggleDebugMode", async () => {
+      const current = KiloLogger.isDebugMode
+      await KiloLogger.setDebugMode(!current)
+      KiloLogger.showChannel()
+      vscode.window.showInformationMessage(
+        `KiloCode V4 Debug Mode ${!current ? "ENABLED" : "DISABLED"}`,
+      )
+    }),
+  )
+
+  // Register onboarding wizard command — allows re-running wizard anytime
+  context.subscriptions.push(
+    vscode.commands.registerCommand("kilo-code.v4.runOnboardingWizard", async () => {
+      await context.globalState.update("kilocode.profile.onboardingComplete", false)
+      vscode.window.showInformationMessage(
+        "KiloCode: Onboarding wizard will open on next sidebar view.",
+      )
+    }),
+  )
 
   const telemetry = TelemetryProxy.getInstance()
 
   // Create shared connection service (one server for all webviews)
   const connectionService = new KiloConnectionService(context)
+
+  // Create CLI backend health recovery service — monitors CLI, auto-reconnects with backoff,
+  // exposes status bar indicator. Fixes the "CLI Server: Error" state with no auto-recovery.
+  try {
+    const healthRecovery = new HealthRecoveryService(connectionService, context)
+    healthRecovery.start()
+    context.subscriptions.push(healthRecovery)
+  } catch (err) {
+    extLog.warn("Failed to start CLI HealthRecoveryService", err)
+  }
 
   // Create browser automation service (manages Playwright MCP registration)
   const browserAutomationService = new BrowserAutomationService(connectionService)
@@ -39,6 +90,110 @@ export function activate(context: vscode.ExtensionContext) {
   const remoteService = new RemoteStatusService()
   context.subscriptions.push(remoteService)
   connectionService.setRemoteService(remoteService)
+
+  // Create Hermes pipeline services (disabled by default; zero cost when off).
+  // See docs/KILOCODE-HERMES-ZEROCLAW-PIPELINE.md for architecture.
+  const hermesStatus = new HermesStatusService(context)
+  context.subscriptions.push(hermesStatus)
+  const hermesClient = new HermesClient(context, hermesStatus.getConfig())
+  hermesStatus.setClient(hermesClient)
+  const hermesPipeline = new HermesPipeline(context, hermesStatus, hermesClient)
+  context.subscriptions.push(hermesPipeline)
+  registerHermesCommands(context, hermesStatus, hermesClient, hermesPipeline)
+
+  // Create V4 subsystem services.
+  // Each service is self-contained, persists its own state, and implements vscode.Disposable.
+  const sshService = new SSHService(context)
+  context.subscriptions.push(sshService)
+
+  const vpsService = new VPSService(context)
+  context.subscriptions.push(vpsService)
+
+  const zeroClawService = new ZeroClawService(context)
+  context.subscriptions.push(zeroClawService)
+
+  const routingService = new RoutingService(context)
+  context.subscriptions.push(routingService)
+
+  const memoryService = new MemoryService(context)
+  context.subscriptions.push(memoryService)
+
+  const trainingService = new TrainingService(context)
+  context.subscriptions.push(trainingService)
+
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ""
+  const governanceService = new GovernanceService(workspaceRoot)
+  context.subscriptions.push(governanceService)
+
+  const workstationProfile = new WorkstationProfileService()
+  context.subscriptions.push(workstationProfile)
+
+  // Auto-discovery — created here, wired into providers, started after setV4Services.
+  // Import is dynamic so the onboarding bundle is only loaded when the module exists.
+  let discoveryService: import("./services/onboarding").OnboardingDiscoveryService | undefined
+
+  // Register all V4 subsystems with governance for adversarial audit coverage
+  governanceService.registerSubsystem("governance", "active")
+  governanceService.registerSubsystem("ssh", "active")
+  governanceService.registerSubsystem("vps", "active")
+  governanceService.registerSubsystem("zeroClaw", "active")
+  governanceService.registerSubsystem("routing", "active")
+  governanceService.registerSubsystem("memory", "active")
+  governanceService.registerSubsystem("training", "active")
+  governanceService.registerSubsystem("workstation", "active")
+  governanceService.registerSubsystem("hermes", "active")
+  governanceService.registerSubsystem("speech", "active")
+  governanceService.registerSubsystem("onboarding", "active")
+  governanceService.registerSubsystem("hubServices", "active")
+
+  // Hub service lifecycle watchdog — probes /api/services/* on activation and
+  // every poll interval. Auto-starts services that have a registered start_cmd.
+  // Status bar item shows "DaveAI: N/M" with click-to-restart quick-pick.
+  let hubServices: HubServicesService | undefined
+  try {
+    hubServices = new HubServicesService(context)
+    context.subscriptions.push(hubServices)
+    hubServices.start()
+  } catch (err) {
+    extLog.warn("Failed to start HubServicesService", err)
+  }
+
+  // Sync the Hermes provider preset into the CLI backend config on toggle.
+  // Runs once on toggle and once on each CLI reconnect (in case Hermes was
+  // already enabled before the backend started).
+  const syncHermesPreset = async (client: KiloClient, enabled: boolean, baseUrl: string) => {
+    try {
+      const globalCfg = (await client.global.config.get({ throwOnError: true })).data ?? {}
+      const disabled: string[] = (globalCfg as { disabled_providers?: string[] }).disabled_providers ?? []
+      if (enabled) {
+        const preset = buildPreset(baseUrl)
+        const nextDisabled = disabled.filter((id) => id !== HERMES_PROVIDER_ID)
+        await client.global.config.update(
+          { config: { provider: { [HERMES_PROVIDER_ID]: preset as unknown as Record<string, unknown> }, disabled_providers: nextDisabled } },
+          { throwOnError: true },
+        )
+        console.log("[Kilo Hermes] Provider preset written to CLI config")
+      } else {
+        if (disabled.includes(HERMES_PROVIDER_ID)) return
+        await client.global.config.update(
+          { config: { disabled_providers: [...disabled, HERMES_PROVIDER_ID] } },
+          { throwOnError: true },
+        )
+        console.log("[Kilo Hermes] Provider preset disabled in CLI config")
+      }
+    } catch (err) {
+      console.warn("[Kilo Hermes] syncHermesPreset failed (non-fatal):", err)
+    }
+  }
+
+  hermesStatus.onChange(async (cfg) => {
+    try {
+      const client = connectionService.getClient()
+      await syncHermesPreset(client, cfg.enabled, cfg.baseUrl)
+    } catch {
+      // CLI not yet connected — will be applied on next connectionService onStateChange
+    }
+  })
 
   // Re-register browser automation MCP server on CLI backend reconnect, configure telemetry,
   // set remote service client, and reload autocomplete so it picks up the now-available backend connection.
@@ -57,11 +212,17 @@ export function activate(context: vscode.ExtensionContext) {
         remoteService.setClient(null)
       }
       AutocompleteServiceManager.getInstance()?.load()
+      // Apply Hermes preset if it was toggled on before the CLI connected.
+      const hermesCfg = hermesStatus.getConfig()
+      void syncHermesPreset(connectionService.getClient(), hermesCfg.enabled, hermesCfg.baseUrl)
     } else {
       remoteService.clearState()
       remoteService.setClient(null)
     }
   })
+
+  // Prewarm the CLI backend early so autocomplete is ready before first editor use.
+  ensureBackendForAutocomplete(connectionService)
 
   // Track all open tab panel providers so toolbar button commands can target them.
   // NOTE: The editor/title toolbar for tab panels intentionally omits Agent Manager
@@ -78,6 +239,83 @@ export function activate(context: vscode.ExtensionContext) {
   // Create the provider with shared service
   const provider = new KiloProvider(context.extensionUri, connectionService, context)
   provider.setRemoteService(remoteService)
+  ;(provider as unknown as { __daveExtensions?: DaveProviderExtensions }).__daveExtensions?.setHermesServices(hermesStatus, hermesClient)
+  ;(provider as unknown as { __daveExtensions?: DaveProviderExtensions }).__daveExtensions?.setV4Services({
+    ssh: sshService,
+    vps: vpsService,
+    zeroClaw: zeroClawService,
+    routing: routingService,
+    memory: memoryService,
+    training: trainingService,
+    governance: governanceService,
+    workstation: workstationProfile,
+    discovery: discoveryService,
+  })
+
+  // Run discovery in background (don't block activation).
+  // Dynamic import so the onboarding bundle is only pulled when the module ships.
+  void import("./services/onboarding").then(({ OnboardingDiscoveryService }) => {
+    discoveryService = new OnboardingDiscoveryService(context)
+    context.subscriptions.push(discoveryService)
+
+    // Wire into all existing providers so tabs can request results
+    const v4WithDiscovery = {
+      ssh: sshService,
+      vps: vpsService,
+      zeroClaw: zeroClawService,
+      routing: routingService,
+      memory: memoryService,
+      training: trainingService,
+      governance: governanceService,
+      workstation: workstationProfile,
+      discovery: discoveryService,
+    }
+    ;(provider as unknown as { __daveExtensions?: DaveProviderExtensions }).__daveExtensions?.setV4Services(v4WithDiscovery)
+    settingsEditorProvider.setV4Services(v4WithDiscovery)
+
+    discoveryService.runFullDiscovery().then(async (result) => {
+      console.log(
+        "[Kilo New] Discovery complete:",
+        result.providers.ollama.available ? "Ollama" : "",
+        result.providers.lmstudio.available ? "LM Studio" : "",
+        result.gpu.detected ? result.gpu.name : "No GPU",
+        `SSH hosts: ${result.sshProfiles.length}`,
+      )
+
+      // Auto-test local providers that discovery found available
+      if (result.providers.ollama.available) {
+        await routingService.testProvider("ollama").catch(() => {})
+      }
+      if (result.providers.lmstudio.available) {
+        await routingService.testProvider("lmstudio").catch(() => {})
+      }
+
+      // Pre-populate GPU detection for TrainingTab
+      if (result.gpu.detected && trainingService) {
+        await trainingService.detectGPUs().catch(() => {})
+      }
+
+      // CRITICAL: Import SSH profiles from ~/.ssh/config into SSHService
+      // so the SSH tab shows real profiles instead of empty list
+      try {
+        const importedProfiles = await sshService.importFromSSHConfig()
+        if (importedProfiles.length > 0) {
+          console.log(`[Kilo New] Auto-imported ${importedProfiles.length} SSH profiles from ~/.ssh/config`)
+        }
+      } catch (err) {
+        console.warn("[Kilo New] SSH auto-import failed (non-fatal):", err)
+      }
+
+      // Notify all open webviews that discovery is complete so they can refresh
+      // Provider will broadcast to all registered webviews (sidebar + tab panels)
+      ;(provider as unknown as { __daveExtensions?: DaveProviderExtensions }).__daveExtensions?.broadcastDiscoveryComplete?.(result)
+    }).catch((err) => {
+      console.warn("[Kilo New] Background discovery failed (non-fatal):", err)
+    })
+  }).catch(() => {
+    // Module doesn't exist yet — another agent is creating it. Silently skip.
+    console.log("[Kilo New] Onboarding discovery module not yet available, skipping")
+  })
 
   // Register the webview view provider for the sidebar.
   // retainContextWhenHidden keeps the webview alive when switching to other sidebar panels.
@@ -94,6 +332,10 @@ export function activate(context: vscode.ExtensionContext) {
   const skip = ["kilo-code.new.agentManagerOpen", "kilo-code.new.agentManager.showTerminal"]
   if (process.platform === "darwin") skip.push("kilo-code.new.agentManager.runScript")
   ensureCommandsSkipShell(skip)
+
+  // Create KiloClaw chat provider for editor panel
+  const kiloClawProvider = new KiloClawProvider(context.extensionUri, connectionService)
+  context.subscriptions.push(kiloClawProvider)
 
   // Create Agent Manager provider for editor panel
   const agentManagerHost = new VscodeHost(context.extensionUri, connectionService, context)
@@ -118,12 +360,34 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   )
 
+  // Register serializer so KiloClaw panel restores when VS Code restarts
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer(KiloClawProvider.viewType, {
+      deserializeWebviewPanel(panel: vscode.WebviewPanel) {
+        kiloClawProvider.restorePanel(panel)
+        return Promise.resolve()
+      },
+    }),
+  )
+
   // Register serializer so "Open in Tab" restores when VS Code restarts
   context.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer("kilo-code.new.TabPanel", {
       deserializeWebviewPanel(panel: vscode.WebviewPanel) {
         const tabProvider = new KiloProvider(context.extensionUri, connectionService, context)
         tabProvider.setRemoteService(remoteService)
+        ;(tabProvider as unknown as { __daveExtensions?: DaveProviderExtensions }).__daveExtensions?.setHermesServices(hermesStatus, hermesClient)
+        ;(tabProvider as unknown as { __daveExtensions?: DaveProviderExtensions }).__daveExtensions?.setV4Services({
+          ssh: sshService,
+          vps: vpsService,
+          zeroClaw: zeroClawService,
+          routing: routingService,
+          memory: memoryService,
+          training: trainingService,
+          governance: governanceService,
+          workstation: workstationProfile,
+          discovery: discoveryService,
+        })
         tabProvider.setContinueInWorktreeHandler((sessionId, progress) =>
           agentManagerProvider.continueFromSidebar(sessionId, progress),
         )
@@ -160,6 +424,18 @@ export function activate(context: vscode.ExtensionContext) {
   // Create settings/profile editor provider (opens in editor area, not sidebar)
   const settingsEditorProvider = new SettingsEditorProvider(context.extensionUri, connectionService, context)
   settingsEditorProvider.setRemoteService(remoteService)
+  settingsEditorProvider.setHermesServices(hermesStatus, hermesClient)
+  settingsEditorProvider.setV4Services({
+    ssh: sshService,
+    vps: vpsService,
+    zeroClaw: zeroClawService,
+    routing: routingService,
+    memory: memoryService,
+    training: trainingService,
+    governance: governanceService,
+    workstation: workstationProfile,
+    discovery: discoveryService,
+  })
   context.subscriptions.push(settingsEditorProvider)
 
   // Create sub-agent viewer provider (read-only editor panel for sub-agent sessions)
@@ -212,6 +488,12 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kilo-code.new.marketplaceButtonClicked", (directory?: string) => {
       settingsEditorProvider.openPanel("marketplace", undefined, directory)
     }),
+    vscode.commands.registerCommand("kilo-code.new.kiloClawOpen", () => {
+      kiloClawProvider.openPanel()
+    }),
+    vscode.commands.registerCommand("kilo-code.hub.open", () => {
+      HubPanel.open(context)
+    }),
     vscode.commands.registerCommand("kilo-code.new.historyButtonClicked", () => {
       const tab = activeTabProvider()
       if (tab) tab.postMessage({ type: "action", action: "historyButtonClicked" })
@@ -261,6 +543,9 @@ export function activate(context: vscode.ExtensionContext) {
         tabPanels,
         diffVirtualProvider,
         remoteService,
+        { ssh: sshService, vps: vpsService, zeroClaw: zeroClawService, routing: routingService, memory: memoryService, training: trainingService, governance: governanceService, workstation: workstationProfile, discovery: discoveryService },
+        hermesStatus,
+        hermesClient,
       )
     }),
     vscode.commands.registerCommand("kilo-code.new.showChanges", () => {
@@ -282,7 +567,9 @@ export function activate(context: vscode.ExtensionContext) {
       agentManagerProvider.postMessage({ type: "action", action: "tabNext" })
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.showTerminal", () => {
-      agentManagerProvider.showTerminalForCurrentSession()
+      // Route through the webview so it can reach into the active session
+      // state and open the VS Code integrated terminal for it.
+      agentManagerProvider.postMessage({ type: "action", action: "showTerminal" })
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.runScript", () => {
       agentManagerProvider.postMessage({ type: "action", action: "runScript" })
@@ -296,6 +583,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("kilo-code.new.agentManager.newTab", () => {
       agentManagerProvider.postMessage({ type: "action", action: "newTab" })
+    }),
+    vscode.commands.registerCommand("kilo-code.new.agentManager.newTerminal", () => {
+      agentManagerProvider.postMessage({ type: "action", action: "newTerminal" })
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.closeTab", () => {
       agentManagerProvider.postMessage({ type: "action", action: "closeTab" })
@@ -336,9 +626,6 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Register autocomplete provider
   registerAutocompleteProvider(context, connectionService)
-
-  // Start the CLI backend server eagerly so autocomplete works without opening a Kilo tab.
-  ensureBackendForAutocomplete(connectionService)
 
   // Register commit message generation
   registerCommitMessageService(context, connectionService)
@@ -401,6 +688,9 @@ async function openKiloInNewTab(
   tabPanels: Map<vscode.WebviewPanel, KiloProvider>,
   diffVirtualProvider: DiffVirtualProvider,
   remoteService: RemoteStatusService,
+  v4Services: Parameters<DaveProviderExtensions["setV4Services"]>[0],
+  hermesStatusArg?: import("./services/hermes").HermesStatusService,
+  hermesClientArg?: import("./services/hermes").HermesClient,
 ) {
   const lastCol = Math.max(...vscode.window.visibleTextEditors.map((e) => e.viewColumn || 0), 0)
   const hasVisibleEditors = vscode.window.visibleTextEditors.length > 0
@@ -424,6 +714,8 @@ async function openKiloInNewTab(
 
   const tabProvider = new KiloProvider(context.extensionUri, connectionService, context)
   tabProvider.setRemoteService(remoteService)
+  if (hermesStatusArg && hermesClientArg) (tabProvider as unknown as { __daveExtensions?: DaveProviderExtensions }).__daveExtensions?.setHermesServices(hermesStatusArg, hermesClientArg)
+  ;(tabProvider as unknown as { __daveExtensions?: DaveProviderExtensions }).__daveExtensions?.setV4Services(v4Services)
   tabProvider.setContinueInWorktreeHandler((sessionId, progress) =>
     agentManagerProvider.continueFromSidebar(sessionId, progress),
   )

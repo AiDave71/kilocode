@@ -1,4 +1,15 @@
-import { Component, createSignal, createMemo, Switch, Match, Show, onMount, onCleanup } from "solid-js"
+import {
+  Component,
+  createSignal,
+  createMemo,
+  createEffect,
+  on,
+  Switch,
+  Match,
+  Show,
+  onMount,
+  onCleanup,
+} from "solid-js"
 import { ThemeProvider } from "@kilocode/kilo-ui/theme"
 import { DialogProvider } from "@kilocode/kilo-ui/context/dialog"
 import { MarkedProvider } from "@kilocode/kilo-ui/context/marked"
@@ -32,10 +43,25 @@ import HistoryView from "./components/history/HistoryView"
 import { MigrationWizard } from "./components/migration" // legacy-migration
 import { NotificationsProvider } from "./context/notifications"
 import type { Message as SDKMessage, Part as SDKPart } from "@kilocode/sdk/v2"
+import type { Part, TextPart } from "./types/messages"
+import { speak, stop as stopSpeech, ensureAudioReady } from "./utils/speech-playback"
+import { filterTextForSpeech, detectSentiment } from "./utils/speech-text-filter"
+import { SpeechProviderRegistry } from "./data/speech-providers"
+import type { SpeechSettings } from "./types/voice"
+import type { ExtensionMessage } from "./types/messages"
 import "./styles/chat.css"
 
 type ViewType = "newTask" | "marketplace" | "history" | "profile" | "settings" | "subAgentViewer"
 const VALID_VIEWS = new Set<string>(["newTask", "marketplace", "history", "profile", "settings", "subAgentViewer"])
+
+function getApiKeyForProvider(ss: SpeechSettings, pid: string): string {
+  if (pid === "azure") return ss.azure?.apiKey ?? ""
+  if (pid === "google") return ss.google?.apiKey ?? ""
+  if (pid === "openai") return ss.openai?.apiKey ?? ""
+  if (pid === "elevenlabs") return ss.elevenlabs?.apiKey ?? ""
+  if (pid === "polly") return ss.polly?.accessKeyId ?? ""
+  return ""
+}
 
 /**
  * Bridge our session store to the DataProvider's expected Data shape.
@@ -182,6 +208,12 @@ const AppContent: Component = () => {
     if (agent) session.selectAgent(agent.name)
   }
 
+  const handleForked = (message: { type?: string; sessionID?: string }) => {
+    if (message.type !== "sessionForked" || !message.sessionID) return
+    session.selectSession(message.sessionID)
+    setCurrentView("newTask")
+  }
+
   onMount(() => {
     const handler = (event: MessageEvent) => {
       const message = event.data
@@ -199,6 +231,7 @@ const AppContent: Component = () => {
         session.selectCloudSession(message.sessionId)
         setCurrentView("newTask")
       }
+      handleForked(message)
       if (message?.type === "viewSubAgentSession" && message.sessionID) {
         console.log("[Kilo New] App: 🔍 viewSubAgentSession:", message.sessionID)
         session.setCurrentSessionID(message.sessionID)
@@ -214,9 +247,137 @@ const AppContent: Component = () => {
     onCleanup(() => window.removeEventListener("message", handler))
   })
 
+  // ── Auto-speak: speak last assistant reply when session goes idle ──
+  const [speechSettings, setSpeechSettings] = createSignal<SpeechSettings | null>(null)
+  let lastSpokenMessageId = ""
+
+  onMount(() => {
+    vscode.postMessage({ type: "requestSpeechSettings" })
+  })
+  const unsubSpeech = vscode.onMessage((msg: ExtensionMessage) => {
+    if (msg.type === "speechSettingsLoaded") {
+      setSpeechSettings(msg.settings)
+    }
+  })
+
+  // Fallback: retry speech settings request if no response within 3 seconds
+  // (matches the pattern used for agents and MCP status in SessionProvider)
+  const speechFallback = setTimeout(() => {
+    if (speechSettings() === null) {
+      vscode.postMessage({ type: "requestSpeechSettings" })
+    }
+  }, 3000)
+
+  // Also retry once extension signals it's fully initialized
+  const unsubReady = vscode.onMessage((msg: ExtensionMessage) => {
+    if (msg.type !== "extensionDataReady") return
+    if (speechSettings() === null) {
+      vscode.postMessage({ type: "requestSpeechSettings" })
+    }
+  })
+
+  onCleanup(() => {
+    unsubSpeech()
+    unsubReady()
+    clearTimeout(speechFallback)
+  })
+
+  // Watch for busy → idle transition to auto-speak
+  // The outer effect tracks session status to detect busy→idle transitions.
+  // The inner effect tracks speechSettings and triggers speak when settings are loaded
+  // (handles the race where settings arrive after the first idle transition).
+  createEffect(
+    on(
+      () => session.status(),
+      (newStatus, prevStatus) => {
+        if (prevStatus !== "busy" || newStatus !== "idle") return
+        const ss = speechSettings()
+        if (!ss) return // settings not loaded yet, inner effect will handle when they load
+
+        // Inner effect: track settings changes and speak when they're loaded
+        createEffect(() => {
+          const settings = speechSettings()
+          if (!settings?.enabled || !settings?.autoSpeak) return
+
+          const provider = SpeechProviderRegistry.get(settings.provider ?? "browser")
+          if (!provider) return
+          if (provider.requiresApiKey && !getApiKeyForProvider(settings, provider.id)) return
+
+          const id = session.currentSessionID()
+          if (!id) return
+          const msgs = session.messages()
+          if (!msgs.length) return
+
+          const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant")
+          if (!lastAssistant || lastAssistant.id === lastSpokenMessageId) return
+          lastSpokenMessageId = lastAssistant.id
+
+          const parts: Part[] = session.allParts()[lastAssistant.id] ?? []
+          const rawText = parts
+            .filter((p): p is TextPart => p.type === "text")
+            .map((p) => p.text)
+            .join(" ")
+            .trim()
+          if (!rawText) return
+
+          // 25-rule text filter: strips code, tool artifacts, identifiers, markdown, enforces length cap
+          const textContent = filterTextForSpeech(rawText)
+          if (!textContent) return
+
+          // Sentiment-based pitch/rate adjustment
+          const sentiment = detectSentiment(textContent)
+
+          ensureAudioReady()
+          speak(textContent, provider, {
+            region: settings.azure?.region,
+            apiKey: getApiKeyForProvider(settings, provider.id),
+            voiceId: settings.azure.voiceId,
+            pitch: settings.tuning.pitch + sentiment.pitchModifier,
+            rate: settings.tuning.rate * sentiment.rateModifier,
+            volume: settings.tuning.volume ?? undefined,
+            style: settings.tuning.style,
+            styleDegree: settings.tuning.styleDegree,
+            emphasis: settings.tuning.emphasis,
+            pronunciations: settings.tuning.pronunciations,
+            audioFormat: settings.tuning.audioFormat,
+            globalVolume: settings.volume,
+          }).catch((err) => console.error("[Speech] Auto-speak failed:", err))
+        })
+      },
+    ),
+  )
+
+  // Interrupt speech on typing (keydown in the window)
+  const handleInterruptOnType = (e: KeyboardEvent) => {
+    const ss = speechSettings()
+    if (!ss?.interruptOnType) return
+    // Only interrupt on printable characters, not modifier keys alone
+    if (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter") {
+      stopSpeech()
+    }
+  }
+  window.addEventListener("keydown", handleInterruptOnType)
+  onCleanup(() => window.removeEventListener("keydown", handleInterruptOnType))
+
+  // Stop speech on session switch
+  createEffect(
+    on(
+      () => session.currentSessionID(),
+      (_newId, prevId) => {
+        if (prevId && _newId !== prevId) {
+          stopSpeech()
+        }
+      },
+    ),
+  )
+
   const handleSelectSession = (id: string) => {
     session.selectSession(id)
     setCurrentView("newTask")
+  }
+
+  const handleForkMessage = (sessionId: string, messageId: string) => {
+    vscode.postMessage({ type: "forkSession", sessionId, messageId })
   }
 
   return (
@@ -225,11 +386,20 @@ const AppContent: Component = () => {
       <Show
         when={migrationNeeded()}
         fallback={
-          <Switch fallback={<ChatView continueInWorktree promptBoxId="sidebar:fallback" />}>
+          <Switch
+            fallback={
+              <ChatView
+                continueInWorktree
+                onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
+                promptBoxId="sidebar:fallback"
+              />
+            }
+          >
             <Match when={currentView() === "newTask"}>
               <ChatView
                 onSelectSession={handleSelectSession}
                 onShowHistory={() => setCurrentView("history")}
+                onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
                 continueInWorktree
                 promptBoxId="sidebar:new-task"
               />

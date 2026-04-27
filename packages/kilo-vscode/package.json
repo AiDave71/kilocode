@@ -1,8 +1,8 @@
 {
   "name": "kilo-code",
-  "displayName": "Kilo Code: AI Coding Agent, Copilot, and Autocomplete",
-  "description": "Open Source AI coding agent that generates code from natural language, automates tasks, and runs terminal commands. Features inline autocomplete, browser automation, automated refactoring, and custom modes for planning, coding, and debugging. Supports 500+ AI models including Claude (Anthropic), Gemini, Grok, GPT, Codex and GLM.",
-  "version": "7.2.14",
+  "displayName": "KiloCode MAOS Edition",
+  "description": "Multi-Agent Operating System (MAOS) for VS Code — 21-agent workforce (kc-main + kc-01..kc-20) with MiniMax default routing, Hub/Open WebUI integration, and collaborative AI development.",
+  "version": "7.2.21-EVO2",
   "icon": "assets/icons/logo-outline-black.png",
   "galleryBanner": {
     "color": "#FFFFFF",
@@ -19,7 +19,7 @@
   },
   "license": "MIT",
   "author": {
-    "name": "Kilo Code"
+    "name": "KiloCode MAOS Edition"
   },
   "categories": [
     "AI",
@@ -82,6 +82,11 @@
     },
     "commands": [
       {
+        "command": "kilo-code.v4.toggleDebugMode",
+        "title": "KiloCode V4: Toggle Debug Mode",
+        "icon": "$(bug)"
+      },
+      {
         "command": "kilo-code.new.plusButtonClicked",
         "title": "New Task",
         "icon": "$(add)"
@@ -90,6 +95,11 @@
         "command": "kilo-code.new.agentManagerOpen",
         "title": "Agent Manager",
         "icon": "$(circuit-board)"
+      },
+      {
+        "command": "kilo-code.new.kiloClawOpen",
+        "title": "KiloClaw",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "kilo-code.new.marketplaceButtonClicked",
@@ -186,6 +196,11 @@
       {
         "command": "kilo-code.new.agentManager.newTab",
         "title": "Agent Manager: New Tab",
+        "category": "Kilo Code"
+      },
+      {
+        "command": "kilo-code.new.agentManager.newTerminal",
+        "title": "Agent Manager: New Terminal Tab (Experimental)",
         "category": "Kilo Code"
       },
       {
@@ -331,6 +346,26 @@
         "command": "kilo-code.new.takeHeapSnapshot",
         "title": "Take Heap Snapshot",
         "category": "Kilo Code"
+      },
+      {
+        "command": "kilo-code.new.hermes.toggle",
+        "title": "Hermes: Toggle Pipeline",
+        "category": "Kilo Code"
+      },
+      {
+        "command": "kilo-code.new.hermes.setApiKey",
+        "title": "Hermes: Set API Key",
+        "category": "Kilo Code"
+      },
+      {
+        "command": "kilo-code.new.hermes.clearApiKey",
+        "title": "Hermes: Clear API Key",
+        "category": "Kilo Code"
+      },
+      {
+        "command": "kilo-code.new.hermes.testConnection",
+        "title": "Hermes: Test Bridge Connection",
+        "category": "Kilo Code"
       }
     ],
     "submenus": [
@@ -361,18 +396,23 @@
           "when": "view == kilo-code.SidebarProvider"
         },
         {
-          "command": "kilo-code.new.marketplaceButtonClicked",
+          "command": "kilo-code.new.kiloClawOpen",
           "group": "navigation@3",
           "when": "view == kilo-code.SidebarProvider"
         },
         {
-          "command": "kilo-code.new.profileButtonClicked",
+          "command": "kilo-code.new.marketplaceButtonClicked",
           "group": "navigation@4",
           "when": "view == kilo-code.SidebarProvider"
         },
         {
-          "command": "kilo-code.new.settingsButtonClicked",
+          "command": "kilo-code.new.profileButtonClicked",
           "group": "navigation@5",
+          "when": "view == kilo-code.SidebarProvider"
+        },
+        {
+          "command": "kilo-code.new.settingsButtonClicked",
+          "group": "navigation@6",
           "when": "view == kilo-code.SidebarProvider"
         }
       ],
@@ -544,6 +584,12 @@
         "when": "activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel'"
       },
       {
+        "command": "kilo-code.new.agentManager.newTerminal",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t",
+        "when": "activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel'"
+      },
+      {
         "command": "kilo-code.new.agentManager.closeTab",
         "key": "ctrl+w",
         "mac": "cmd+w",
@@ -660,6 +706,16 @@
     "configuration": {
       "title": "Kilo Code",
       "properties": {
+        "kilo-code.v4.debugMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose debug logging for all V4 subsystems (SSH, VPS, Routing, Governance, Training, Memory, ZeroClaw, Workstation). Logs appear in the 'KiloCode V4' output channel."
+        },
+        "kilo-code.v4.messageTracing": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log every webview ↔ extension message for V4 subsystems. Useful for debugging message contract mismatches. Requires debugMode to be enabled."
+        },
         "kilo-code.new.language": {
           "type": "string",
           "default": "",
@@ -800,6 +856,427 @@
           "type": "boolean",
           "default": true,
           "description": "Show the task timeline graph in the chat header"
+        },
+        "kilo-code.new.speech.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable text-to-speech for assistant replies"
+        },
+        "kilo-code.new.speech.autoSpeak": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically speak assistant replies when they complete"
+        },
+        "kilo-code.new.speech.volume": {
+          "type": "number",
+          "default": 80,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Speech output volume level (0-100)"
+        },
+        "kilo-code.new.speech.interactionMode": {
+          "type": "string",
+          "default": "assist",
+          "enum": [
+            "assist",
+            "conversation",
+            "minimal"
+          ],
+          "description": "How voice responses work during your session"
+        },
+        "kilo-code.new.speech.interruptOnType": {
+          "type": "boolean",
+          "default": true,
+          "description": "Stop speech when you start typing"
+        },
+        "kilo-code.new.speech.debugMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show verbose speech engine logs in developer console"
+        },
+        "kilo-code.new.speech.sentimentIntensity": {
+          "type": "number",
+          "default": 70,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "How strongly pitch/rate shift to match emotional tone (0-100)"
+        },
+        "kilo-code.new.speech.multiVoiceMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Each AI agent speaks in a distinct voice"
+        },
+        "kilo-code.new.speech.azure.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Azure Cognitive Services Speech API key"
+        },
+        "kilo-code.new.speech.azure.region": {
+          "type": "string",
+          "default": "westus",
+          "description": "Azure Speech resource region"
+        },
+        "kilo-code.new.speech.azure.voiceId": {
+          "type": "string",
+          "default": "en-GB-MaisieNeural",
+          "description": "Azure Neural TTS voice ID"
+        },
+        "kilo-code.new.speech.tuning.pitch": {
+          "type": "number",
+          "default": 0,
+          "minimum": -50,
+          "maximum": 50,
+          "description": "Voice pitch adjustment (-50% to +50%)"
+        },
+        "kilo-code.new.speech.tuning.rate": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.5,
+          "maximum": 2,
+          "description": "Speech rate/speed (0.5x to 2.0x)"
+        },
+        "kilo-code.new.speech.tuning.volume": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "description": "Per-voice volume override (null = use global)"
+        },
+        "kilo-code.new.speech.tuning.style": {
+          "type": "string",
+          "default": "default",
+          "description": "Speaking style (voice-dependent)"
+        },
+        "kilo-code.new.speech.tuning.styleDegree": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.5,
+          "maximum": 2,
+          "description": "Style intensity (0.5x to 2.0x)"
+        },
+        "kilo-code.new.speech.tuning.sentencePause": {
+          "type": "number",
+          "default": 250,
+          "minimum": 0,
+          "maximum": 2000,
+          "description": "Silence between sentences (ms)"
+        },
+        "kilo-code.new.speech.tuning.paragraphBreak": {
+          "type": "number",
+          "default": 500,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "Silence between paragraphs (ms)"
+        },
+        "kilo-code.new.speech.tuning.emphasis": {
+          "type": "string",
+          "default": "moderate",
+          "enum": [
+            "none",
+            "reduced",
+            "moderate",
+            "strong"
+          ],
+          "description": "Word emphasis level"
+        },
+        "kilo-code.new.speech.tuning.pronunciations": {
+          "type": "array",
+          "default": [],
+          "description": "Custom pronunciation overrides for technical terms"
+        },
+        "kilo-code.new.speech.tuning.audioFormat": {
+          "type": "string",
+          "default": "audio-24khz-48kbitrate-mono-mp3",
+          "enum": [
+            "audio-16khz-32kbitrate-mono-mp3",
+            "audio-24khz-48kbitrate-mono-mp3",
+            "audio-48khz-96kbitrate-mono-mp3"
+          ],
+          "enumDescriptions": [
+            "Low quality (16kHz) - smallest size",
+            "Standard quality (24kHz) - recommended",
+            "High quality (48kHz) - best audio"
+          ],
+          "description": "Audio output format and quality"
+        },
+        "kilo-code.new.speech.favorites.starredVoices": {
+          "type": "array",
+          "default": [
+            "en-GB-MaisieNeural"
+          ],
+          "description": "Starred favorite voices"
+        },
+        "kilo-code.new.speech.favorites.order": {
+          "type": "array",
+          "default": [
+            "en-GB-MaisieNeural"
+          ],
+          "description": "Display order of favorites"
+        },
+        "kilo-code.new.speech.presets": {
+          "type": "array",
+          "default": [],
+          "description": "Saved voice + tuning presets"
+        },
+        "kilo-code.new.speech.provider": {
+          "type": "string",
+          "default": "browser",
+          "description": "Active speech provider",
+          "enum": [
+            "browser",
+            "azure",
+            "google",
+            "openai",
+            "elevenlabs",
+            "polly"
+          ]
+        },
+        "kilo-code.new.speech.google.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Google Cloud TTS API key"
+        },
+        "kilo-code.new.speech.openai.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key for TTS"
+        },
+        "kilo-code.new.speech.elevenlabs.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "ElevenLabs API key"
+        },
+        "kilo-code.new.speech.polly.accessKeyId": {
+          "type": "string",
+          "default": "",
+          "description": "AWS access key ID for Amazon Polly"
+        },
+        "kilo-code.new.speech.polly.secretAccessKey": {
+          "type": "string",
+          "default": "",
+          "description": "AWS secret access key for Amazon Polly"
+        },
+        "kilo-code.new.speech.polly.region": {
+          "type": "string",
+          "default": "us-east-1",
+          "description": "AWS region for Amazon Polly"
+        },
+        "kilo-code.new.hermes.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Route tasks through the Hermes orchestration pipeline (KiloCode \u2192 Hermes \u2192 ZeroClaw). Disabled by default; zero cost when off."
+        },
+        "kilo-code.new.hermes.baseUrl": {
+          "type": "string",
+          "default": "http://187.77.30.206:18789",
+          "description": "Hermes Bridge API base URL. POST /tasks, GET /tasks/{id}/events, and GET /health are served from this root."
+        },
+        "kilo-code.new.hermes.approvalMode": {
+          "type": "string",
+          "default": "auto-low",
+          "enum": [
+            "auto-all",
+            "auto-low",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "Auto-approve all task risk tiers (not recommended)",
+            "Auto-approve low-risk only; medium/high require manual approval",
+            "Require manual approval for every task"
+          ],
+          "description": "Which Hermes task risk tiers to auto-approve."
+        },
+        "kilo-code.new.hermes.workspaceScopeOnly": {
+          "type": "boolean",
+          "default": true,
+          "description": "Restrict Hermes execution to the current VS Code workspace folder."
+        },
+        "kilo-code.new.ssh.profiles": {
+          "type": "array",
+          "default": [],
+          "description": "Saved SSH connection profiles for remote server management."
+        },
+        "kilo-code.new.vps.servers": {
+          "type": "array",
+          "default": [],
+          "description": "Registered VPS/infrastructure server inventory."
+        },
+        "kilo-code.new.zeroclaw.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable ZeroClaw risk-based execution engine."
+        },
+        "kilo-code.new.zeroclaw.autoApproveLevel": {
+          "type": "string",
+          "default": "low",
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "all"
+          ],
+          "enumDescriptions": [
+            "Manual approval for all tasks",
+            "Auto-approve low-risk only",
+            "Auto-approve low and medium risk",
+            "Auto-approve all (not recommended)"
+          ],
+          "description": "Which ZeroClaw risk levels to auto-approve."
+        },
+        "kilo-code.new.routing.mode": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "Automatically route to best provider by role and availability",
+            "Manually select provider for each request"
+          ],
+          "description": "Provider routing mode."
+        },
+        "kilo-code.new.routing.privacyMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Prefer local providers (Ollama, LM Studio) over cloud for privacy-sensitive tasks."
+        },
+        "kilo-code.new.routing.costThreshold": {
+          "type": "number",
+          "default": 10,
+          "minimum": 0,
+          "description": "Maximum estimated cost per request (USD). Providers exceeding this are skipped."
+        },
+        "kilo-code.new.memory.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Shiba memory for cross-session fact recall."
+        },
+        "kilo-code.new.memory.endpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Shiba memory service endpoint URL. Leave empty for local-only memory."
+        },
+        "kilo-code.new.training.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the Training & GPU subsystem for local/remote model fine-tuning."
+        },
+        "kilo-code.new.governance.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable governance, approval gates, and audit logging for dangerous actions."
+        },
+        "kilo-code.new.governance.defaultTier": {
+          "type": "string",
+          "default": "Operator",
+          "enum": [
+            "Observer",
+            "Operator",
+            "Admin",
+            "SuperAdmin"
+          ],
+          "description": "Default authority tier for the current user."
+        },
+        "kilo-code.new.workstation.name": {
+          "type": "string",
+          "default": "dave-main-workstation",
+          "description": "Friendly name for this workstation profile."
+        },
+        "kilo-code.new.workstation.hardware.gpu.model": {
+          "type": "string",
+          "default": "RTX_3090_Ti",
+          "description": "GPU model identifier for hardware-aware routing."
+        },
+        "kilo-code.new.workstation.hardware.gpu.vramGb": {
+          "type": "number",
+          "default": 24,
+          "description": "GPU VRAM in GB."
+        },
+        "kilo-code.new.workstation.hardware.ramGb": {
+          "type": "number",
+          "default": 128,
+          "description": "System RAM in GB."
+        },
+        "kilo-code.new.workstation.localAI.lmStudio.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable LM Studio as a local AI endpoint."
+        },
+        "kilo-code.new.workstation.localAI.lmStudio.apiBase": {
+          "type": "string",
+          "default": "http://localhost:1234",
+          "description": "LM Studio API base URL."
+        },
+        "kilo-code.new.workstation.localAI.ollama.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Ollama as a local AI endpoint."
+        },
+        "kilo-code.new.workstation.localAI.ollama.apiBase": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama API base URL."
+        },
+        "kilo-code.new.workstation.limits.maxParallelJobs": {
+          "type": "number",
+          "default": 4,
+          "description": "Maximum parallel jobs across all subsystems."
+        },
+        "kilo-code.new.workstation.limits.maxGpuMemoryMb": {
+          "type": "number",
+          "default": 24576,
+          "description": "Maximum GPU memory allocation in MB."
+        },
+        "kilo-code.new.workstation.routingPreferences.preferLocalFor": {
+          "type": "array",
+          "default": [
+            "memory_tasks",
+            "embeddings",
+            "small_generation",
+            "private_data_tasks"
+          ],
+          "description": "Task types that should prefer local execution."
+        },
+        "kilo-code.new.workstation.routingPreferences.preferCloudFor": {
+          "type": "array",
+          "default": [
+            "large_planning",
+            "contract_generation",
+            "high_parallel_execution"
+          ],
+          "description": "Task types that should prefer cloud execution."
+        },
+        "kilo-code.new.workstation.modelLibrary.lmStudioModelsPath": {
+          "type": "string",
+          "default": "C:\\Users\\Admin\\.lmstudio\\models",
+          "description": "Path to LM Studio models directory (~700GB)."
+        },
+        "kilo-code.new.workstation.modelLibrary.ollamaModelsPath": {
+          "type": "string",
+          "default": "C:\\Users\\Admin\\.ollama\\models",
+          "description": "Path to Ollama models directory."
+        },
+        "kilo-code.new.workstation.modelLibrary.loraPath": {
+          "type": "string",
+          "default": "G:\\LoRAs",
+          "description": "Path to LoRA adapters for fine-tuning."
+        },
+        "kilo-code.new.workstation.modelLibrary.comfyuiModelsPath": {
+          "type": "string",
+          "default": "G:\\ComfyUI\\models",
+          "description": "Path to ComfyUI models (checkpoints, VAE, ControlNet, upscalers)."
+        },
+        "kilo-code.new.workstation.modelLibrary.mediaModelsPath": {
+          "type": "string",
+          "default": "G:\\Models",
+          "description": "Root path for TTS, STT, image, video, music, voice models."
+        },
+        "kilo-code.new.workstation.modelLibrary.totalEstimatedSizeGb": {
+          "type": "number",
+          "default": 800,
+          "description": "Total estimated model storage in GB across all libraries."
         }
       }
     }
@@ -868,6 +1345,11 @@
     "@kilocode/sdk": "workspace:*",
     "@opencode-ai/ui": "workspace:*",
     "@thisbeyond/solid-dnd": "0.7.5",
+    "@xterm/addon-clipboard": "0.2.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-unicode-graphemes": "0.4.0",
+    "@xterm/addon-web-links": "0.12.0",
+    "@xterm/xterm": "6.0.0",
     "diff": "8.0.4",
     "dotenv": "^16.4.7",
     "fastest-levenshtein": "^1.0.16",
@@ -879,6 +1361,7 @@
     "quick-lru": "^7.0.0",
     "simple-git": "3.35.2",
     "solid-js": "^1.9.11",
+    "stream-chat": "9.38.0",
     "uri-js": "^4.4.1",
     "virtua": "catalog:",
     "web-tree-sitter": "^0.24.7",

@@ -1,5 +1,7 @@
+/* eslint-disable max-lines */
 import * as path from "path"
 import * as vscode from "vscode"
+import { KiloLogger } from "./services/KiloLogger"
 import { buildPreviewPath, getPreviewCommand, getPreviewDir, parseImage, trimEntries } from "./image-preview"
 import { isAbsolutePath } from "./path-utils"
 import type {
@@ -10,6 +12,7 @@ import type {
   TextPartInput,
   FilePartInput,
   Config,
+  Agent,
 } from "@kilocode/sdk/v2/client"
 import { type KiloConnectionService, type KilocodeNotification, ServerStartupError } from "./services/cli-backend"
 import type { EditorContext } from "./services/cli-backend/types"
@@ -32,6 +35,8 @@ import {
   flushPendingSessionRefresh as flushPendingSessionRefreshUtil,
   resolveContextDirectory,
   resolveWorkspaceDirectory,
+  mergeFileSearchResults,
+  buildTelemetryProperties,
   SessionStreamScheduler,
   type SessionRefreshContext,
 } from "./kilo-provider-utils"
@@ -39,10 +44,12 @@ import { GitOps } from "./agent-manager/GitOps"
 import { GitStatsPoller, type LocalStats } from "./agent-manager/GitStatsPoller"
 import { diffSummary as localDiffSummary } from "./agent-manager/local-diff"
 import { getWorkspaceRoot } from "./review-utils"
+import { buildStatsPolling } from "./kilo-provider/stats-polling"
 import { MarketplaceService, type MarketplaceItem, type RemoveResult } from "./services/marketplace"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
 import { resolveProjectDirectory } from "./project-directory"
 import { getBusySessionCount, seedSessionStatuses } from "./session-status"
+import { ApiKeyScannerService } from "./services/ApiKeyScannerService"
 import { retry } from "./services/cli-backend/retry"
 import { slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { handleContinueInWorktree } from "./kilo-provider/continue-worktree"
@@ -55,6 +62,8 @@ import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-pa
 import { childID } from "./kilo-provider/task-session"
 import { handleNetworkEvent, clearNetworkWaits } from "./kilo-provider/network"
 import { abortSession, parseQueued } from "./kilo-provider/abort"
+import * as ModelState from "./kilo-provider/model-state"
+import { handleForkSession } from "./kilo-provider/fork-session"
 import { retryable, backoff, MAX_RETRIES } from "./util/retry"
 import { hasGit } from "./kilo-provider/git-status"
 // legacy-migration start
@@ -106,7 +115,7 @@ import {
   saveCustomProvider as saveCustomProviderAction,
 } from "./provider-actions"
 import { fetchOpenAIModels, FetchModelsError } from "./shared/fetch-models"
-import type { Agent } from "@kilocode/sdk/v2/client"
+import { installDaveExtensions } from "./KiloProvider.dave"
 
 type KiloProviderOptions = {
   projectDirectory?: string | null
@@ -241,16 +250,21 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.slimEditMetadata = options?.slimEditMetadata ?? true
 
     TelemetryProxy.getInstance().setProvider(this)
+
+    // Wire optional overlay extensions. After this call, the overlay
+    // is reachable as `(this as any).__daveExtensions` and the
+    // message-router hook below dispatches to it.
+    installDaveExtensions(this)
   }
 
   setRemoteService(service: RemoteStatusService): void {
     this.remoteService = service
-    this.unsubscribeRemote = service.onChange(() => this.sendRemoteStatus())
+    this.unsubscribeRemote = service.onChange(() => {
+      const s = this.remoteService?.getState()
+      if (s) this.postMessage({ type: "remoteStatus", enabled: s.enabled, connected: s.connected })
+    })
   }
-  private sendRemoteStatus(): void {
-    const s = this.remoteService?.getState()
-    if (s) this.postMessage({ type: "remoteStatus", enabled: s.enabled, connected: s.connected })
-  }
+
   private focusSession(id?: string): void {
     this.streams.focus(id)
     if (id) this.connectionService.registerFocused(this.instanceId, id)
@@ -268,15 +282,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   }
 
   getTelemetryProperties(): Record<string, unknown> {
-    return {
-      appName: "kilo-code",
-      appVersion: this.extensionVersion,
-      platform: "vscode",
-      editorName: vscode.env.appName,
-      vscodeVersion: vscode.version,
-      machineId: vscode.env.machineId,
-      vscodeIsTelemetryEnabled: vscode.env.isTelemetryEnabled,
-    }
+    return buildTelemetryProperties(this.extensionVersion)
   }
 
   /**
@@ -303,11 +309,17 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     return slimParts(parts)
   }
 
-  /**
-   * Synchronize current extension-side state to the webview.
-   * This is primarily used after a webview refresh where early postMessage calls
-   * may have been dropped before the webview registered its message listeners.
-   */
+  private get forkCtx() {
+    return {
+      connection: this.connectionService,
+      post: (msg: { type: "error"; message: string }) => this.postMessage(msg),
+      register: (session: Session) => this.registerSession(session),
+      forked: (session: Session) => this.postMessage({ type: "sessionForked", sessionID: session.id }),
+      status: (sessionID: string) => this.sessionStatusMap.get(sessionID),
+      directory: (sessionID: string) => this.getWorkspaceDirectory(sessionID),
+    }
+  }
+
   private async syncWebviewState(reason: string): Promise<void> {
     const serverInfo = this.connectionService.getServerInfo()
     console.log("[Kilo New] KiloProvider: 🔄 syncWebviewState()", {
@@ -368,7 +380,8 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       const reconcile = this.sessionStatusMap.size === 0
       void this.seedSessionStatusMap(reconcile)
 
-      this.sendRemoteStatus()
+      const rs = this.remoteService?.getState()
+      if (rs) this.postMessage({ type: "remoteStatus", enabled: rs.enabled, connected: rs.connected })
     }
 
     // legacy-migration start
@@ -448,7 +461,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.trackedSessionIds.add(session.id)
     this.postMessage({
       type: "sessionCreated",
-      session: this.sessionToWebview(session),
+      session: sessionToWebview(session),
     })
   }
 
@@ -529,24 +542,15 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.postMessage({ type: "openCloudSession", sessionId })
   }
 
-  /** Register the handler for "Continue in Worktree" messages from the sidebar. */
   public setContinueInWorktreeHandler(
     handler: (sessionId: string, progress: (status: string, detail?: string, error?: string) => void) => Promise<void>,
   ): void {
     this.continueInWorktreeHandler = handler
   }
 
-  /**
-   * Attach to a webview that already has its own HTML set.
-   * Sets up message handling and connection without overriding HTML content.
-   *
-   * @param options.onBeforeMessage - Optional interceptor called before the standard handler.
-   *   Return null to consume the message (stop propagation), or return the message
-   *   (possibly transformed) to continue with standard handling.
-   */
   public attachToWebview(
     webview: vscode.Webview,
-    options?: { onBeforeMessage?: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null> },
+    options?: { onBeforeMessage?: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>; },
   ): void {
     this.isWebviewReady = false
     this.webview = webview
@@ -555,12 +559,9 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.initializeConnection()
   }
 
-  /**
-   * Set up the shared message handler for both sidebar and tab webviews.
-   * Handles ALL message types so tabs have full functionality.
-   */
   private setupWebviewMessageHandler(webview: vscode.Webview): void {
     this.webviewMessageDisposable?.dispose()
+    // eslint-disable-next-line complexity
     this.webviewMessageDisposable = webview.onDidReceiveMessage(async (message) => {
       // Run interceptor if attached (e.g., AgentManagerProvider worktree logic)
       if (this.onBeforeMessage) {
@@ -575,6 +576,13 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       }
 
       await routeSuggestionWebviewMessage(this.questionCtx, message)
+      // Inbound message tracing — log every webview message when tracing is enabled
+      if (KiloLogger.isMessageTracing) {
+        KiloLogger.for("KiloProvider").trace("in", message.type as string, message)
+      }
+      if (await ModelState.handleMessage(message.type, message, this.client, (msg) => this.postMessage(msg))) return
+      // Optional overlay extensions handle V4-subsystem messages first. Returns true when consumed.
+      if (await (this as unknown as { __daveExtensions?: { handleV4Message: (m: Record<string, unknown>) => Promise<boolean> } }).__daveExtensions?.handleV4Message?.(message)) return
       switch (message.type) {
         case "webviewReady":
           console.log("[Kilo New] KiloProvider: ✅ webviewReady received")
@@ -709,6 +717,12 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
             post: (msg) => this.postMessage(msg),
           })
           break
+        case "forkSession":
+          handleForkSession(this.forkCtx, message.sessionId, message.messageId).catch((e) =>
+            console.error("[Kilo New] handleForkSession failed:", e),
+          )
+          break
+
         case "retryConnection":
           console.log("[Kilo New] KiloProvider: 🔄 Retrying connection...")
           this.initializeConnection().catch((e) =>
@@ -854,7 +868,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
           this.remoteService
             ?.handleMessage(message.type, message.enabled)
             .then((s) => {
-              if (s) this.sendRemoteStatus()
+              if (s) { const r = this.remoteService?.getState(); if (r) this.postMessage({ type: "remoteStatus", enabled: r.enabled, connected: r.connected }) }
             })
             .catch((err) => console.error("[Kilo New] remote message failed:", err))
           break
@@ -875,6 +889,18 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
           break
         case "requestNotificationSettings":
           this.sendNotificationSettings()
+          break
+        case "requestSpeechSettings":
+          this.sendSpeechSettings()
+          break
+        case "validateAzureKey":
+          this.validateAzureKey(message.apiKey, message.region)
+          break
+        case "requestApiKeys":
+          this.handleRequestApiKeys()
+          break
+        case "autoFillSetting":
+          await this.handleAutoFillSetting(message.key)
           break
         case "requestTimelineSetting":
           this.sendTimelineSetting()
@@ -1046,7 +1072,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       }
     })
   }
-
   private openExternal(url: unknown): void {
     if (typeof url !== "string") return
     void vscode.env.openExternal(vscode.Uri.parse(url))
@@ -1278,7 +1303,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       // Notify webview of the new session
       this.postMessage({
         type: "sessionCreated",
-        session: this.sessionToWebview(this.currentSession!),
+        session: sessionToWebview(this.currentSession!),
       })
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to create session:", error)
@@ -1567,7 +1592,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       if (this.currentSession?.id === sessionID) {
         this.currentSession = updated
       }
-      this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(updated) })
+      this.postMessage({ type: "sessionUpdated", session: sessionToWebview(updated) })
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to rename session:", error)
       this.postMessage({
@@ -1695,7 +1720,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: message, auth })
     }
   }
-
   /**
    * Fetch agents (modes) from the backend and send to webview.
    */
@@ -2234,6 +2258,212 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     })
   }
 
+  private sendSpeechSettings(): void {
+    const s = vscode.workspace.getConfiguration("kilo-code.new.speech"),
+      g = <T>(k: string, d: T) => s.get<T>(k, d)
+    const azureKey = g("azure.apiKey", "")
+    const providerInspect = s.inspect<string>("provider")
+    const explicitProvider = providerInspect?.globalValue ?? providerInspect?.workspaceValue // kilocode_change
+    const provider = explicitProvider ?? (azureKey ? "azure" : "browser") // kilocode_change: smart-default to azure when key is configured
+    this.postMessage({
+      type: "speechSettingsLoaded",
+      settings: {
+        enabled: g("enabled", true),
+        autoSpeak: g("autoSpeak", true),
+        volume: g("volume", 80),
+        interactionMode: g("interactionMode", "assist"),
+        interruptOnType: g("interruptOnType", true),
+        debugMode: g("debugMode", false),
+        sentimentIntensity: g("sentimentIntensity", 70),
+        multiVoiceMode: g("multiVoiceMode", false),
+        provider,
+        azure: {
+          apiKey: azureKey,
+          region: g("azure.region", "westus"),
+          voiceId: g("azure.voiceId", "en-GB-MaisieNeural"),
+        },
+        google: { apiKey: g("google.apiKey", "") },
+        openai: { apiKey: g("openai.apiKey", "") },
+        elevenlabs: { apiKey: g("elevenlabs.apiKey", "") },
+        polly: {
+          accessKeyId: g("polly.accessKeyId", ""),
+          secretAccessKey: g("polly.secretAccessKey", ""),
+          region: g("polly.region", "us-east-1"),
+        },
+        tuning: {
+          pitch: g("tuning.pitch", 0),
+          rate: g("tuning.rate", 1.0),
+          volume: g<number | null>("tuning.volume", null),
+          style: g("tuning.style", "default"),
+          styleDegree: g("tuning.styleDegree", 1.0),
+          sentencePause: g("tuning.sentencePause", 250),
+          paragraphBreak: g("tuning.paragraphBreak", 500),
+          emphasis: g("tuning.emphasis", "moderate"),
+          pronunciations: g("tuning.pronunciations", []),
+          audioFormat: g("tuning.audioFormat", "audio-24khz-48kbitrate-mono-mp3"),
+        },
+        favorites: {
+          starredVoices: g("favorites.starredVoices", ["en-GB-MaisieNeural"]),
+          presets: g("favorites.presets", []),
+          order: g("favorites.order", ["en-GB-MaisieNeural"]),
+        },
+        presets: g("presets", []),
+      },
+    })
+  }
+  private async validateAzureKey(apiKey: string, region: string): Promise<void> {
+    try {
+      const resp = await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
+        method: "POST",
+        headers: {
+          "Ocp-Apim-Subscription-Key": apiKey,
+          "Content-Type": "application/ssml+xml",
+          "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+        },
+        body: `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='en-GB-MaisieNeural'>test</voice></speak>`,
+      })
+      this.postMessage(
+        resp.ok
+          ? { type: "azureKeyValidationResult", valid: true }
+          : { type: "azureKeyValidationResult", valid: false, error: `HTTP ${resp.status}: ${resp.statusText}` },
+      )
+    } catch (e: any) {
+      this.postMessage({ type: "azureKeyValidationResult", valid: false, error: e.message ?? "Network error" })
+    }
+  }
+
+  /**
+   * Handle request for discovered API keys from the webview.
+   * Returns a summary of available keys (without exposing actual key values).
+   */
+  private handleRequestApiKeys(): void {
+    const summary = ApiKeyScannerService.getDiscoverySummary()
+    this.postMessage({ type: "apiKeysDiscovered", keys: summary })
+  }
+
+  /**
+   * Handle auto-fill request for a specific setting.
+   * Discovers API keys and fills in the requested setting.
+   */
+  private async handleAutoFillSetting(key: string): Promise<void> {
+    const scanResult = ApiKeyScannerService.scan()
+
+    try {
+      let success = false
+      let error: string | undefined
+
+      // Handle speech settings
+      if (key === "speech.azure") {
+        if (!scanResult.azure.apiKey) {
+          error = "No Azure API key found"
+        } else {
+          const speechConfig = vscode.workspace.getConfiguration("kilo-code.new.speech")
+          await speechConfig.update("azure.apiKey", scanResult.azure.apiKey, vscode.ConfigurationTarget.Global)
+          if (scanResult.azure.region) {
+            await speechConfig.update("azure.region", scanResult.azure.region, vscode.ConfigurationTarget.Global)
+          }
+          await speechConfig.update("provider", "azure", vscode.ConfigurationTarget.Global)
+          success = true
+        }
+      } else if (key === "speech.google") {
+        if (!scanResult.google) {
+          error = "No Google API key found"
+        } else {
+          const speechConfig = vscode.workspace.getConfiguration("kilo-code.new.speech")
+          await speechConfig.update("google.apiKey", scanResult.google, vscode.ConfigurationTarget.Global)
+          success = true
+        }
+      } else if (key === "speech.openai") {
+        if (!scanResult.openai) {
+          error = "No OpenAI API key found"
+        } else {
+          const speechConfig = vscode.workspace.getConfiguration("kilo-code.new.speech")
+          await speechConfig.update("openai.apiKey", scanResult.openai, vscode.ConfigurationTarget.Global)
+          success = true
+        }
+      } else if (key === "speech.elevenlabs") {
+        if (!scanResult.elevenlabs) {
+          error = "No ElevenLabs API key found"
+        } else {
+          const speechConfig = vscode.workspace.getConfiguration("kilo-code.new.speech")
+          await speechConfig.update("elevenlabs.apiKey", scanResult.elevenlabs, vscode.ConfigurationTarget.Global)
+          success = true
+        }
+      } else if (key === "speech.polly") {
+        if (!scanResult.polly.accessKeyId) {
+          error = "No AWS credentials found"
+        } else {
+          const speechConfig = vscode.workspace.getConfiguration("kilo-code.new.speech")
+          await speechConfig.update("polly.accessKeyId", scanResult.polly.accessKeyId, vscode.ConfigurationTarget.Global)
+          if (scanResult.polly.secretAccessKey) {
+            await speechConfig.update("polly.secretAccessKey", scanResult.polly.secretAccessKey, vscode.ConfigurationTarget.Global)
+          }
+          if (scanResult.polly.region) {
+            await speechConfig.update("polly.region", scanResult.polly.region, vscode.ConfigurationTarget.Global)
+          }
+          success = true
+        }
+      } else if (key === "provider.siliconflow") {
+        if (scanResult.siliconflow.length === 0) {
+          error = "No SiliconFlow API key found"
+        } else {
+          // SiliconFlow is configured via custom provider in config.yaml
+          // Store the API key in VS Code configuration for the custom provider
+          const config = vscode.workspace.getConfiguration("kilo-code.new")
+          await config.update("provider.siliconflow.apiKey", scanResult.siliconflow[0], vscode.ConfigurationTarget.Global)
+          success = true
+        }
+      } else if (key === "provider.minimax") {
+        if (!scanResult.minimax) {
+          error = "No MiniMax API key found"
+        } else {
+          const config = vscode.workspace.getConfiguration("kilo-code.new")
+          await config.update("provider.minimax.apiKey", scanResult.minimax, vscode.ConfigurationTarget.Global)
+          success = true
+        }
+      } else if (key === "provider.github") {
+        if (!scanResult.github) {
+          error = "No GitHub token found"
+        } else {
+          const config = vscode.workspace.getConfiguration("kilo-code.new")
+          await config.update("provider.github.token", scanResult.github, vscode.ConfigurationTarget.Global)
+          success = true
+        }
+      } else if (key === "training.huggingface") {
+        if (!scanResult.huggingface) {
+          error = "No HuggingFace token found"
+        } else {
+          // Store in VS Code secret storage for training
+          await this.extensionContext?.secrets.store("kilo-training-huggingface", scanResult.huggingface)
+          const config = vscode.workspace.getConfiguration("kilo-code.new")
+          await config.update("training.huggingface.token", scanResult.huggingface, vscode.ConfigurationTarget.Global)
+          success = true
+        }
+      } else {
+        error = `Unknown setting: ${key}`
+      }
+
+      this.postMessage({
+        type: "autoFillResult",
+        key,
+        success,
+        error,
+      })
+
+      // Refresh speech settings if we auto-filled a speech setting
+      if (key.startsWith("speech.")) {
+        this.sendSpeechSettings()
+      }
+    } catch (e: any) {
+      this.postMessage({
+        type: "autoFillResult",
+        key,
+        success: false,
+        error: e.message ?? "Unknown error",
+      })
+    }
+  }
+
   private sendTimelineSetting(): void {
     const config = vscode.workspace.getConfiguration("kilo-code.new")
     this.postMessage({
@@ -2323,7 +2553,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       if (draftID) this.contextSessionID = session.id
       this.postMessage({
         type: "sessionCreated",
-        session: this.sessionToWebview(session),
+        session: sessionToWebview(session),
         draftID,
       })
     }
@@ -2839,6 +3069,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.sendBrowserSettings()
     this.sendNotificationSettings()
     this.sendTimelineSetting()
+    await ModelState.reset(this.client, (msg) => this.postMessage(msg))
 
     // Re-send globalState items to the webview
     this.postMessage({ type: "variantsLoaded", variants: {} })

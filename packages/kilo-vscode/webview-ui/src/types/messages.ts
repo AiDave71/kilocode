@@ -206,6 +206,10 @@ export interface QuestionOption {
   label: string
   description: string
   mode?: string
+  // Optional i18n keys — the backend fills these for strings it wants translated in the webview.
+  // The canonical English `label` stays on the reply wire, so server-side matching is unaffected.
+  labelKey?: string
+  descriptionKey?: string
 }
 
 export interface QuestionInfo {
@@ -214,6 +218,9 @@ export interface QuestionInfo {
   options: QuestionOption[]
   multiple?: boolean
   custom?: boolean
+  // Optional i18n keys for question text and header (see QuestionOption for details).
+  questionKey?: string
+  headerKey?: string
 }
 
 export interface QuestionRequest {
@@ -571,6 +578,11 @@ export interface SessionCreatedMessage {
   type: "sessionCreated"
   session: SessionInfo
   draftID?: string
+}
+
+export interface SessionForkedMessage {
+  type: "sessionForked"
+  sessionID: string
 }
 
 export interface SessionUpdatedMessage {
@@ -1031,6 +1043,30 @@ export interface AgentManagerStateMessage {
   runScriptPath?: string
 }
 
+// ---------------------------------------------------------------------------
+// Agent Manager terminal messages
+// ---------------------------------------------------------------------------
+
+export interface AgentManagerTerminalCreatedMessage {
+  type: "agentManager.terminal.created"
+  /** null for LOCAL, worktree id otherwise */
+  worktreeId: string | null
+  terminalId: string
+  title: string
+  wsUrl: string
+}
+
+export interface AgentManagerTerminalClosedMessage {
+  type: "agentManager.terminal.closed"
+  terminalId: string
+}
+
+export interface AgentManagerTerminalErrorMessage {
+  type: "agentManager.terminal.error"
+  terminalId?: string
+  message: string
+}
+
 export interface AgentManagerRunStatusMessage extends RunStatus {
   type: "agentManager.runStatus"
 }
@@ -1064,6 +1100,12 @@ export interface RecentsLoadedMessage {
 export interface FavoritesLoadedMessage {
   type: "favoritesLoaded"
   favorites: ModelSelection[]
+}
+
+// Per-mode model selections loaded from model.json (extension → webview)
+export interface ModelSelectionsLoadedMessage {
+  type: "modelSelectionsLoaded"
+  selections: Record<string, ModelSelection>
 }
 
 export interface BranchInfo {
@@ -1527,6 +1569,7 @@ export type ExtensionMessage =
   | PermissionErrorMessage
   | TodoUpdatedMessage
   | SessionCreatedMessage
+  | SessionForkedMessage
   | SessionUpdatedMessage
   | SessionDeletedMessage
   | MessageRemovedMessage
@@ -1598,6 +1641,9 @@ export type ExtensionMessage =
   | AgentManagerWorktreeStatsMessage
   | AgentManagerLocalStatsMessage
   | AgentManagerPRStatusMessage
+  | AgentManagerTerminalCreatedMessage
+  | AgentManagerTerminalClosedMessage
+  | AgentManagerTerminalErrorMessage
   // legacy-migration start
   | MigrationStateMessage
   | LegacyMigrationDataMessage
@@ -1621,6 +1667,7 @@ export type ExtensionMessage =
   | CustomProviderModelsFetchedMessage
   | RecentsLoadedMessage
   | FavoritesLoadedMessage
+  | ModelSelectionsLoadedMessage
   | LanguageChangedMessage
   | ContinueInWorktreeProgressMessage
   | WorktreeStatsLoadedMessage
@@ -1628,6 +1675,56 @@ export type ExtensionMessage =
   | ClearPendingPromptsMessage
   | ExtensionDataReadyMessage
   | RemoteStatusMessage
+  | SpeechSettingsLoadedMessage
+  | AzureKeyValidationResultMessage
+  // V4 subsystem messages (SSH, VPS, ZeroClaw, Routing, Memory, Training, Governance)
+  | V4SubsystemMessage
+
+/** Catch-all for V4 subsystem extension→webview messages. Each subsystem prefixes its type. */
+export interface V4SubsystemMessage {
+  type:
+    // SSH
+    | "sshProfilesLoaded" | "sshSessionsUpdated"
+    | "sshConnectionStatus" | "sshFilesListed" | "sshLogOutput" | "sshLogTailingStopped"
+    | "sshFilePreviewResult" | "sshErrors" | "sshError"
+    // VPS
+    | "vpsServersLoaded" | "vpsServerAdded" | "vpsServerUpdated" | "vpsServerRemoved"
+    | "vpsMetricsLoaded" | "vpsServicesLoaded"
+    | "vpsContainersLoaded" | "vpsDeployHistoryLoaded"
+    | "vpsBackupStatus" | "vpsReverseProxyConfigsLoaded" | "vpsReverseProxyTestResult"
+    | "vpsDeployPreflightFailed"
+    // ZeroClaw
+    | "zeroClawTasksLoaded" | "zeroClawTaskSubmitted" | "zeroClawTaskUpdated"
+    | "zeroClawTaskRetried" | "zeroClawHistoryLoaded" | "zeroClawContext"
+    | "zeroClawTaskResult" | "zeroClawArtifacts" | "zeroClawError"
+    // Routing
+    | "routingProvidersLoaded" | "routingTracesLoaded" | "routingHealthLoaded"
+    | "routingConfigLoaded" | "routingTestResult" | "routingKeyConfigured"
+    // Memory
+    | "memoryStatusLoaded" | "memoryRecallResult"
+    | "memoryWriteResult" | "memoryHistoryLoaded"
+    | "memoryConnectionChanged" | "memoryPermissionChanged"
+    | "memoryHealthChanged" | "memoryDiagnosticResult" | "memoryRecallTracesLoaded"
+    // Training
+    | "trainingState" | "trainingCompareResult" | "trainingExportComplete"
+    | "trainingDatasetRegistered" | "trainingDatasetValidated" | "trainingDatasetRemoved"
+    | "trainingJobLaunched" | "trainingJobUpdated" | "trainingJobRemoved"
+    | "trainingGPUDetected" | "trainingBrowsePathResult" | "trainingError"
+    // Governance
+    | "governanceState" | "governanceAuditLog" | "governanceAuditExport" | "governanceError"
+    // Generic V4 error fallback
+    | "v4Error"
+    // Workstation
+    | "workstationProfile" | "workstationHardware" | "workstationLimits"
+    | "workstationLocalAI" | "workstationRoutingPrefs" | "workstationLocalPref"
+    | "workstationModelLibrary" | "workstationModelsForCategory"
+    | "workstationLoRAStatus" | "workstationLocalTTSStatus" | "workstationLocalSTTStatus"
+    // Hermes pipeline (extension → webview)
+    | "hermesStatusUpdate" | "hermesTasksUpdate"
+    | "hermesAgentAssistResult" | "hermesError"
+    | "hermesTaskSubmitted" | "hermesTaskApproved" | "hermesTaskCancelled"
+  [key: string]: unknown
+}
 
 // ============================================
 // Messages FROM webview TO extension
@@ -2054,6 +2151,13 @@ export interface ForkSessionRequest {
   type: "agentManager.forkSession"
   sessionId: string
   worktreeId?: string
+  messageId?: string
+}
+
+export interface SidebarForkSessionRequest {
+  type: "forkSession"
+  sessionId: string
+  messageId?: string
 }
 
 // Close (remove) a session from its worktree
@@ -2134,6 +2238,26 @@ export interface CopyToClipboardRequest {
 // Show existing local terminal when switching to local context (no-op if none exists)
 export interface ShowExistingLocalTerminalRequest {
   type: "agentManager.showExistingLocalTerminal"
+}
+
+// Create a new xterm terminal tab in the given worktree context (null = local)
+export interface AgentManagerTerminalCreateRequest {
+  type: "agentManager.terminal.create"
+  worktreeId: string | null
+}
+
+// Close a terminal tab
+export interface AgentManagerTerminalCloseRequest {
+  type: "agentManager.terminal.close"
+  terminalId: string
+}
+
+// Notify the extension of an xterm resize so it can update the backend PTY dimensions
+export interface AgentManagerTerminalResizeRequest {
+  type: "agentManager.terminal.resize"
+  terminalId: string
+  cols: number
+  rows: number
 }
 
 // Open a file in the selected worktree for a specific session
@@ -2421,6 +2545,23 @@ export interface RequestFavoritesMessage {
   type: "requestFavorites"
 }
 
+// Per-mode model selection persistence (webview → extension)
+export interface PersistModelSelectionRequest {
+  type: "persistModelSelection"
+  agent: string
+  providerID: string
+  modelID: string
+}
+
+export interface ClearModelSelectionRequest {
+  type: "clearModelSelection"
+  agent: string
+}
+
+export interface RequestModelSelectionsMessage {
+  type: "requestModelSelections"
+}
+
 // Continue in Worktree: transfer sidebar session + git state to an isolated worktree
 export interface ContinueInWorktreeRequest {
   type: "continueInWorktree"
@@ -2484,6 +2625,29 @@ export interface ContinueInWorktreeProgressMessage {
   status: ContinueInWorktreeStatus
   detail?: string
   error?: string
+}
+
+// Speech settings messages (webview → extension)
+export interface RequestSpeechSettingsMessage {
+	type: "requestSpeechSettings"
+}
+
+export interface ValidateAzureKeyMessage {
+	type: "validateAzureKey"
+	apiKey: string
+	region: string
+}
+
+// Speech settings messages (extension → webview)
+export interface SpeechSettingsLoadedMessage {
+	type: "speechSettingsLoaded"
+	settings: import("./voice").SpeechSettings
+}
+
+export interface AzureKeyValidationResultMessage {
+	type: "azureKeyValidationResult"
+	valid: boolean
+	error?: string
 }
 
 export type WebviewMessage =
@@ -2555,6 +2719,7 @@ export type WebviewMessage =
   | OpenLocallyRequest
   | AddSessionToWorktreeRequest
   | ForkSessionRequest
+  | SidebarForkSessionRequest
   | CloseSessionRequest
   | PersistSessionRequest
   | ForgetSessionRequest
@@ -2624,6 +2789,9 @@ export type WebviewMessage =
   | RequestRecentsMessage
   | ToggleFavoriteRequest
   | RequestFavoritesMessage
+  | PersistModelSelectionRequest
+  | ClearModelSelectionRequest
+  | RequestModelSelectionsMessage
   | ToggleRemoteMessage
   | SetRemoteEnabledMessage
   | RequestRemoteStatusMessage
@@ -2635,6 +2803,57 @@ export type WebviewMessage =
   | ToggleSectionCollapsedRequest
   | MoveToSectionRequest
   | MoveSectionRequest
+  | RequestSpeechSettingsMessage
+  | ValidateAzureKeyMessage
+  // V4 subsystem messages (SSH, VPS, ZeroClaw, Routing, Memory, Training, Governance)
+  | V4SubsystemRequest
+  | AgentManagerTerminalCreateRequest
+  | AgentManagerTerminalCloseRequest
+  | AgentManagerTerminalResizeRequest
+
+/** Catch-all for V4 subsystem webview→extension messages. */
+export interface V4SubsystemRequest {
+  type:
+    | "requestSSHProfiles" | "requestSSHSessions"
+    | "sshProfileSave" | "sshProfileDelete" | "sshConnect" | "sshDisconnect"
+    | "sshOpenTerminal" | "sshBrowseFiles" | "sshFileOpen" | "sshFileDownload" | "sshFileUpload" | "sshTailLogs"
+    | "sshFilePreview" | "sshGetErrors" | "sshClearErrors" | "sshFileDiff" | "sshFileSaveRemote"
+    | "requestVPSServers" | "requestVpsServers"
+    | "vpsServerAdd" | "vpsServerRemove" | "vpsRefreshMetrics"
+    | "vpsServiceAction" | "vpsDockerAction" | "vpsDeploy" | "vpsRollback" | "vpsBackup"
+    | "vpsGetReverseProxyConfigs" | "vpsAddReverseProxyConfig" | "vpsRemoveReverseProxyConfig" | "vpsTestReverseProxyConfig"
+    | "requestZeroClawTasks"
+    | "zeroClawSubmitTask" | "zeroClawCancelTask" | "zeroClawRetryTask"
+    | "zeroClawApproveTask" | "zeroClawRejectTask" | "zeroClawGetHistory"
+    | "zeroClawGetTaskResult" | "zeroClawCollectArtifacts"
+    | "requestRoutingState"
+    | "routingTestProvider" | "routingConfigureKey" | "routingSetRole"
+    | "routingSetMode" | "routingSetFallbackOrder" | "routingGetTraces" | "routingGetHealth"
+    | "memoryGetStatus" | "memoryRecall" | "memoryWrite" | "memoryReconnect" | "memoryGetHistory" | "memorySetPermission"
+    | "memoryRunDiagnostics" | "memoryGetRecallTraces"
+    | "requestTrainingState" | "trainingGetJobs"
+    | "trainingRegisterDataset" | "trainingValidateDataset" | "trainingRemoveDataset"
+    | "trainingLaunchJob" | "trainingPauseJob" | "trainingResumeJob" | "trainingCancelJob"
+    | "trainingResumeCheckpoint" | "trainingDetectGPU" | "trainingCompareRuns"
+    | "trainingExportModel" | "trainingBrowsePath"
+    | "requestGovernanceState"
+    | "governanceSetTier" | "governanceApproveAction" | "governanceRejectAction"
+    | "governanceAddDangerousAction" | "governanceToggleBlock"
+    | "governanceGetAuditLog" | "governanceCreateVerdict" | "governanceExportAudit"
+    | "workstationGetProfile" | "workstationGetHardware" | "workstationGetLimits"
+    | "workstationGetLocalAI" | "workstationGetRoutingPrefs" | "workstationShouldPreferLocal"
+    | "workstationGetModelLibrary" | "workstationGetModelsByCategory"
+    | "workstationHasLoRAs" | "workstationHasLocalTTS" | "workstationHasLocalSTT"
+    | "workstationReload"
+    // Onboarding / Discovery
+    | "requestDiscoveryResult" | "triggerDiscovery" | "markOnboardingComplete" | "resetOnboarding"
+    // Hermes pipeline
+    | "requestHermesStatus" | "hermesToggle" | "hermesTestConnection"
+    | "hermesSetApiKey" | "hermesClearApiKey" | "hermesUpdateConfig"
+    | "hermesAgentAssist" | "hermesSubmitTask"
+    | "requestHermesTasks" | "hermesApproveTask" | "hermesCancelTask"
+  [key: string]: unknown
+}
 
 // ============================================
 // VS Code API type
