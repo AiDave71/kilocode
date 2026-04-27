@@ -228,6 +228,9 @@ export namespace McpOAuthCallback {
         resolve(true)
       })
       socket.on("error", () => {
+        // kilocode_change: was leaking socket handle on error path; called on
+        // every OAuth start, accumulating handles over time.
+        socket.destroy()
         resolve(false)
       })
     })

@@ -151,6 +151,11 @@ export namespace RemoteWS {
 
     function schedule() {
       if (closed) return
+      // kilocode_change: previously stacked pending timers — every recursive
+      // schedule() call (from onclose / no-token path) overwrote `timer` without
+      // clearing the prior one. Two timers could fire simultaneously, producing
+      // a rapid double-reconnect.
+      if (timer) clearTimeout(timer)
       timer = setTimeout(() => open(), backoff)
       backoff = Math.min(backoff * 2, 60000)
     }

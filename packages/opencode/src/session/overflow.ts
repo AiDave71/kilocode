@@ -10,8 +10,10 @@ export function isOverflow(input: { cfg: Config.Info; tokens: MessageV2.Assistan
   const context = input.model.limit.context
   if (context === 0) return false
 
-  const count =
-    input.tokens.total || input.tokens.input + input.tokens.output + input.tokens.cache.read + input.tokens.cache.write
+  // kilocode_change: cache.read/cache.write are SUBSETS of input tokens (every
+  // provider reports them that way), not additive context usage. Adding them
+  // overestimated context use and triggered compaction prematurely.
+  const count = input.tokens.total || input.tokens.input + input.tokens.output
 
   const reserved =
     input.cfg.compaction?.reserved ?? Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model))
