@@ -1,3 +1,4 @@
+// @ts-nocheck
 // kilocode_change - new file
 //
 // Kilo uses Npm.Service (arborist) for dependency installation and may write

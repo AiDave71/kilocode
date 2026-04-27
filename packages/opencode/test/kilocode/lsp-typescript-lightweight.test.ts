@@ -8,11 +8,14 @@ import { LSPServer } from "../../src/lsp"
 import { TsClient } from "../../src/kilocode/ts-client"
 import { TsCheck } from "../../src/kilocode/ts-check"
 import { Flag } from "../../src/flag/flag"
-import { Instance } from "../../src/project/instance"
+import { Instance, type InstanceContext } from "../../src/project/instance"
 
 afterEach(async () => {
   await Instance.disposeAll()
 })
+
+// Typescript.spawn doesn't use ctx, so a cast-through is fine for these tests.
+const fakeCtx = {} as InstanceContext
 
 describe("typescript lightweight mode", () => {
   describe("spawn gate", () => {

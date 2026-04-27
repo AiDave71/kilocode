@@ -72,11 +72,18 @@ export namespace ConfigValidation {
     const config =
       schema === "command" ? { ...md.data, template: md.content.trim() } : { ...md.data, prompt: md.content.trim() }
 
-    const zod = schema === "command" ? ConfigCommand.Info : ConfigAgent.Info
-    const result = zod.safeParse(config)
-    if (!result.success) {
-      const issues = result.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n")
-      return `\n\n<config_validation>\nWARNING: Configuration is invalid at ${label(filepath)}\n${issues}\n</config_validation>`
+    if (schema === "command") {
+      const result = ConfigCommand.Info.safeParse(config)
+      if (!result.success) {
+        const issues = result.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n")
+        return `\n\n<config_validation>\nWARNING: Configuration is invalid at ${label(filepath)}\n${issues}\n</config_validation>`
+      }
+    } else {
+      const result = ConfigAgent.Info.safeParse(config)
+      if (!result.success) {
+        const issues = result.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n")
+        return `\n\n<config_validation>\nWARNING: Configuration is invalid at ${label(filepath)}\n${issues}\n</config_validation>`
+      }
     }
 
     return `\n\n<config_validation>\nConfig file validated successfully.\n</config_validation>`

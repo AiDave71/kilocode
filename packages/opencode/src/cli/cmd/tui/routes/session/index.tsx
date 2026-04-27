@@ -48,7 +48,6 @@ import { useSDK } from "@tui/context/sdk"
 import { useCommandDialog } from "@tui/component/dialog-command"
 import type { DialogContext } from "@tui/ui/dialog"
 import { useKeybind } from "@tui/context/keybind"
-import { parsePatch } from "diff"
 import { useDialog } from "../../ui/dialog"
 import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
@@ -88,6 +87,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { TuiPluginRuntime } from "../../plugin"
 import { DialogGoUpsell } from "../../component/dialog-go-upsell"
 import { SessionRetry } from "@/session/retry"
+import { getRevertDiffFiles } from "../../util/revert-diff"
 
 addDefaultParsers(parsers.parsers)
 
@@ -529,7 +529,7 @@ export function Session() {
       },
     },
     {
-      title: "Fork from message",
+      title: "Fork session",
       value: "session.fork",
       keybind: "session_fork",
       category: "Session",
@@ -540,6 +540,7 @@ export function Session() {
         dialog.replace(() => (
           <DialogForkFromTimeline
             onMove={(messageID) => {
+              if (!messageID) return
               const child = scroll.getChildren().find((child) => {
                 return child.id === messageID
               })
@@ -1075,31 +1076,7 @@ export function Session() {
   const revertInfo = createMemo(() => session()?.revert)
   const revertMessageID = createMemo(() => revertInfo()?.messageID)
 
-  const revertDiffFiles = createMemo(() => {
-    const diffText = revertInfo()?.diff ?? ""
-    if (!diffText) return []
-
-    try {
-      const patches = parsePatch(diffText)
-      return patches.map((patch) => {
-        const filename = patch.newFileName || patch.oldFileName || "unknown"
-        const cleanFilename = filename.replace(/^[ab]\//, "")
-        return {
-          filename: cleanFilename,
-          additions: patch.hunks.reduce(
-            (sum, hunk) => sum + hunk.lines.filter((line) => line.startsWith("+")).length,
-            0,
-          ),
-          deletions: patch.hunks.reduce(
-            (sum, hunk) => sum + hunk.lines.filter((line) => line.startsWith("-")).length,
-            0,
-          ),
-        }
-      })
-    } catch {
-      return []
-    }
-  })
+  const revertDiffFiles = createMemo(() => getRevertDiffFiles(revertInfo()?.diff ?? ""))
 
   const revertRevertedMessages = createMemo(() => {
     const messageID = revertMessageID()
@@ -1295,7 +1272,8 @@ export function Session() {
                 <NetworkPrompt request={network()[0]} />
               </Show>
               {/* kilocode_change end */}
-              <Show when={visible()}>
+              {/* kilocode_change start */}
+              <Show when={!session()?.parentID}>
                 <TuiPluginRuntime.Slot
                   name="session_prompt"
                   mode="replace"
@@ -1317,6 +1295,7 @@ export function Session() {
                   />
                 </TuiPluginRuntime.Slot>
               </Show>
+              {/* kilocode_change end */}
             </box>
           </Show>
           <Toast />

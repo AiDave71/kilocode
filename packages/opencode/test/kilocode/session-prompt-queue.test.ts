@@ -1,7 +1,10 @@
 import path from "path"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
+import { Bus } from "../../src/bus"
 import { KiloSessionPromptQueue } from "../../src/kilocode/session/prompt-queue"
+import { Suggestion } from "../../src/kilocode/suggestion"
+import { Question } from "../../src/question"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
@@ -221,11 +224,85 @@ describe("session prompt queue", () => {
     expect(ids[ids.length - 1]).toBe(injected)
   })
 
-  test("continues a queued prompt after the active run finishes", async () => {
+  test("hasFollowup reports true only for prompts enqueued after the active slot started", async () => {
+    const sessionID = SessionID.make("session_followup_semantics")
+    const observed: Array<{ where: string; value: boolean }> = []
+    const firstStarted = Promise.withResolvers<void>()
+    const firstReleased = Promise.withResolvers<void>()
+    const secondStarted = Promise.withResolvers<void>()
+    const secondReleased = Promise.withResolvers<void>()
+
+    const first = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        MessageID.make("message_followup_1"),
+        Effect.gen(function* () {
+          observed.push({ where: "first:start", value: KiloSessionPromptQueue.hasFollowup(sessionID) })
+          firstStarted.resolve()
+          yield* Effect.promise(() => firstReleased.promise)
+          observed.push({ where: "first:end", value: KiloSessionPromptQueue.hasFollowup(sessionID) })
+          return "first"
+        }),
+        Effect.succeed("first-cancelled"),
+      ),
+    )
+
+    await firstStarted.promise
+    // msg1 is alone — nothing newer has arrived yet.
+    expect(observed[0]?.value).toBe(false)
+
+    const second = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        MessageID.make("message_followup_2"),
+        Effect.gen(function* () {
+          observed.push({ where: "second:start", value: KiloSessionPromptQueue.hasFollowup(sessionID) })
+          secondStarted.resolve()
+          yield* Effect.promise(() => secondReleased.promise)
+          return "second"
+        }),
+        Effect.succeed("second-cancelled"),
+      ),
+    )
+
+    // Enqueueing msg2 while msg1 is still running must flip hasFollowup to true
+    // for msg1's running slot.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(true)
+
+    const third = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        MessageID.make("message_followup_3"),
+        Effect.sync(() => {
+          observed.push({ where: "third:start", value: KiloSessionPromptQueue.hasFollowup(sessionID) })
+          return "third"
+        }),
+        Effect.succeed("third-cancelled"),
+      ),
+    )
+
+    // Let msg1 finish.
+    firstReleased.resolve()
+    await first
+    await secondStarted.promise
+
+    // msg2 started after msg3 was enqueued, so hasFollowup should be false for
+    // msg2 — everything waiting is older than msg2's activeSince snapshot.
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(false)
+    secondReleased.resolve()
+
+    expect(await second).toBe("second")
+    expect(await third).toBe("third")
+
+    const events = observed.map((item) => `${item.where}=${item.value}`)
+    expect(events).toEqual(["first:start=false", "first:end=true", "second:start=false", "third:start=false"])
+  })
+
+  test("processes queued prompts without aborting the in-flight stream", async () => {
     const ready = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
+    const injected = Promise.withResolvers<void>()
     const calls: number[] = []
-    const replies = ["first reply", "second reply", "third reply"]
     const server = Bun.serve({
       port: 0,
       fetch(req) {
@@ -235,8 +312,8 @@ describe("session prompt queue", () => {
         calls.push(Date.now())
         const body =
           calls.length === 1
-            ? reply({ text: replies[0], ready: ready.resolve, wait: release.promise })
-            : reply({ text: replies[calls.length - 1] ?? "extra reply" })
+            ? reply({ text: "first reply", ready: ready.resolve })
+            : reply({ text: "second reply", ready: injected.resolve })
         return new Response(body, {
           status: 200,
           headers: { "Content-Type": "text/event-stream" },
@@ -288,43 +365,49 @@ describe("session prompt queue", () => {
             agent: "code",
             parts: [{ type: "text", text: "second prompt" }],
           })
-          const third = SessionPrompt.prompt({
-            sessionID: session.id,
-            agent: "code",
-            parts: [{ type: "text", text: "third prompt" }],
-          })
 
-          await Bun.sleep(20)
-          expect(calls).toHaveLength(1)
-          const queued = await Session.messages({ sessionID: session.id })
-          expect(queued.filter((msg) => msg.info.role === "user")).toHaveLength(3)
-          expect(queued.filter((msg) => msg.info.role === "assistant")).toHaveLength(1)
-
-          release.resolve()
-          await first
+          const one = await first
+          await injected.promise
           const two = await second
-          const three = await third
 
+          expect(calls).toHaveLength(2)
+
+          // The in-flight stream must complete; no aborted error on msg1's reply.
+          expect(one.info.role).toBe("assistant")
+          if (one.info.role === "assistant") expect(one.info.error).toBeUndefined()
+          expect(hasText(one, "first reply")).toBe(true)
           expect(hasText(two, "second reply")).toBe(true)
-          expect(hasText(three, "third reply")).toBe(true)
-          expect(calls).toHaveLength(3)
 
           const msgs = await Session.messages({ sessionID: session.id })
           const users = msgs.filter((msg) => msg.info.role === "user")
           const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+          const prompts = users.flatMap((msg) =>
+            msg.parts.filter((part) => part.type === "text").map((part) => part.text),
+          )
           const text = assistants.flatMap((msg) =>
             msg.parts.filter((part) => part.type === "text").map((part) => part.text),
           )
-          expect(users).toHaveLength(3)
-          expect(assistants).toHaveLength(3)
+          expect(users).toHaveLength(2)
+          expect(assistants).toHaveLength(2)
+          expect(prompts).toContain("first prompt")
+          expect(prompts).toContain("second prompt")
           expect(text).toContain("first reply")
           expect(text).toContain("second reply")
-          expect(text).toContain("third reply")
-          for (const [index, item] of assistants.entries()) {
-            const user = users[index]?.info
-            if (item.info.role !== "assistant" || user?.role !== "user") throw new Error("missing turn")
-            expect(item.info.parentID).toBe(user.id)
+
+          const firstUser = users.find((msg) => hasText(msg, "first prompt"))
+          const secondUser = users.find((msg) => hasText(msg, "second prompt"))
+          const firstReply = assistants.find((msg) => hasText(msg, "first reply"))
+          const secondReply = assistants.find((msg) => hasText(msg, "second reply"))
+          if (
+            firstUser?.info.role !== "user" ||
+            secondUser?.info.role !== "user" ||
+            firstReply?.info.role !== "assistant" ||
+            secondReply?.info.role !== "assistant"
+          ) {
+            throw new Error("missing expected messages")
           }
+          expect(firstReply.info.parentID).toBe(firstUser.info.id)
+          expect(secondReply.info.parentID).toBe(secondUser.info.id)
         },
       })
     } finally {
@@ -392,12 +475,14 @@ describe("session prompt queue", () => {
             parts: [{ type: "text", text: "third prompt" }],
           })
 
+          // Let msg2/msg3's enqueue capture the current version before cancel bumps it.
           await Bun.sleep(20)
           expect(calls).toHaveLength(1)
 
           await SessionPrompt.cancel(session.id)
           await Promise.all([first, second, third])
 
+          // The queued prompts must never reach the LLM once cancel flushes the queue.
           expect(calls).toHaveLength(1)
           const msgs = await Session.messages({ sessionID: session.id })
           const assistants = msgs.filter((msg) => msg.info.role === "assistant")
@@ -414,10 +499,109 @@ describe("session prompt queue", () => {
             ),
           )
           expect(ids).toEqual([])
+          expect(KiloSessionPromptQueue.hasFollowup(session.id)).toBe(false)
         },
       })
     } finally {
       server.stop(true)
     }
+  })
+
+  test("new prompt dismisses a pending suggestion", async () => {
+    const shown = Promise.withResolvers<void>()
+    const dismissed = Promise.withResolvers<void>()
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({ title: "Suggestion unblock regression" })
+        const offShown = Bus.subscribe(Suggestion.Event.Shown, (event) => {
+          if (event.properties.sessionID === session.id) shown.resolve()
+        })
+        const offDismissed = Bus.subscribe(Suggestion.Event.Dismissed, (event) => {
+          if (event.properties.sessionID === session.id) dismissed.resolve()
+        })
+
+        try {
+          const base = Suggestion.show({
+            sessionID: session.id,
+            text: "Run review?",
+            actions: [{ label: "Review", prompt: "/local-review-uncommitted" }],
+          }).catch((err) => {
+            if (err instanceof Suggestion.DismissedError) return "dismissed"
+            throw err
+          })
+
+          await shown.promise
+          await SessionPrompt.prompt({
+            sessionID: session.id,
+            agent: "code",
+            parts: [{ type: "text", text: "replacement prompt" }],
+            noReply: true,
+          })
+          await dismissed.promise
+
+          expect(await base).toBe("dismissed")
+          expect(await Suggestion.list()).toEqual([])
+        } finally {
+          offShown()
+          offDismissed()
+        }
+      },
+    })
+  })
+
+  test("new prompt dismisses a pending question", async () => {
+    const asked = Promise.withResolvers<void>()
+    const rejected = Promise.withResolvers<void>()
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({ title: "Question unblock regression" })
+        const offAsked = Bus.subscribe(Question.Event.Asked, (event) => {
+          if (event.properties.sessionID === session.id) asked.resolve()
+        })
+        const offRejected = Bus.subscribe(Question.Event.Rejected, (event) => {
+          if (event.properties.sessionID === session.id) rejected.resolve()
+        })
+
+        try {
+          const pending = Question.ask({
+            sessionID: session.id,
+            questions: [
+              {
+                header: "Continue?",
+                question: "Should I continue?",
+                options: [
+                  { label: "Yes", description: "Go ahead" },
+                  { label: "No", description: "Stop" },
+                ],
+              },
+            ],
+          }).catch((err) => {
+            if (err instanceof Question.RejectedError) return "rejected"
+            throw err
+          })
+
+          await asked.promise
+          await SessionPrompt.prompt({
+            sessionID: session.id,
+            agent: "code",
+            parts: [{ type: "text", text: "replacement prompt" }],
+            noReply: true,
+          })
+          await rejected.promise
+
+          expect(await pending).toBe("rejected")
+          expect(await Question.list()).toEqual([])
+        } finally {
+          offAsked()
+          offRejected()
+        }
+      },
+    })
   })
 })

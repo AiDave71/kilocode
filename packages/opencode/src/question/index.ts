@@ -149,6 +149,7 @@ export namespace Question {
     readonly reply: (input: { requestID: QuestionID; answers: ReadonlyArray<Answer> }) => Effect.Effect<void>
     readonly reject: (requestID: QuestionID) => Effect.Effect<void>
     readonly list: () => Effect.Effect<ReadonlyArray<Request>>
+    readonly dismissAll: (sessionID: SessionID) => Effect.Effect<void> // kilocode_change
   }
 
   export class Service extends Context.Service<Service, Interface>()("@opencode/Question") {}
@@ -246,7 +247,25 @@ export namespace Question {
         return Array.from(pending.values(), (x) => x.info)
       })
 
-      return Service.of({ ask, reply, reject, list })
+      // kilocode_change start - dismiss every pending question on a session so a new
+      // prompt can unblock an in-flight tool waiting on user input. Mirrors
+      // Suggestion.dismissAll so both read the same way at the callsite.
+      const dismissAll = Effect.fn("Question.dismissAll")(function* (sessionID: SessionID) {
+        const pending = (yield* InstanceState.get(state)).pending
+        const matches = Array.from(pending.entries()).filter(([, entry]) => entry.info.sessionID === sessionID)
+        for (const [id, entry] of matches) {
+          pending.delete(id)
+          log.info("dismissed", { requestID: id })
+          yield* bus.publish(Event.Rejected, {
+            sessionID: entry.info.sessionID,
+            requestID: entry.info.id,
+          })
+          yield* Deferred.fail(entry.deferred, new RejectedError())
+        }
+      })
+      // kilocode_change end
+
+      return Service.of({ ask, reply, reject, list, dismissAll }) // kilocode_change
     }),
   )
 
@@ -258,5 +277,6 @@ export namespace Question {
   export const ask = (input: Parameters<Interface["ask"]>[0]) => runPromise((svc) => svc.ask(input))
   export const reply = (input: Parameters<Interface["reply"]>[0]) => runPromise((svc) => svc.reply(input))
   export const reject = (requestID: QuestionID) => runPromise((svc) => svc.reject(requestID))
+  export const dismissAll = (sessionID: string) => runPromise((svc) => svc.dismissAll(SessionID.make(sessionID)))
   // kilocode_change end
 }

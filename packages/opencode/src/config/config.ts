@@ -17,7 +17,7 @@ import { InstallationLocal, InstallationVersion } from "@/installation/version"
 import { existsSync } from "fs"
 import { GlobalBus } from "@/bus/global"
 import { Event } from "../server/event"
-import { Account } from "@/account"
+import { Account } from "@/account/account"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "./console-state"
 import { AppFileSystem } from "@opencode-ai/shared/filesystem"
@@ -127,7 +127,7 @@ export const Info = z
         "Enable or disable snapshot tracking. When false, filesystem snapshots are not recorded and undoing or reverting will not undo/redo file changes. Defaults to true.",
       ),
     // User-facing plugin config is stored as Specs; provenance gets attached later while configs are merged.
-    plugin: ConfigPlugin.Spec.array().optional(),
+    plugin: ConfigPlugin.Spec.zod.array().optional(),
     share: z
       .enum(["manual", "auto", "disabled"])
       .optional()
